@@ -3,8 +3,6 @@ jobs:
   build:
     parallelism: 2
     working_directory: ~/token_validator
-    environment:
-      - CODECOV_TOKEN: $CODECOV_TOKEN
     docker:
       - image: circleci/ruby:2.5.3
 

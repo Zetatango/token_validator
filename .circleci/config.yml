@@ -9,9 +9,21 @@ jobs:
     steps:
       - checkout
 
+      - restore_cache:
+          name: Restore bundle cache
+          keys:
+            - token_validator-bundle-{{ checksum "Gemfile.lock" }}
+            - token_validator-bundle-
+
       - run:
           name: Bundle Install
           command: bundle install
+
+      - save_cache:
+          name: Store bundle cache
+          key: token_validator-bundle-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
 
       - run:
           name: Run rubocop

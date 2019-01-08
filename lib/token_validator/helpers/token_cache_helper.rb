@@ -6,24 +6,23 @@ require 'rest-client'
 module TokenValidator::TokenCacheHelper
   protected
 
-  CACHE_NAMESPACE_HASH = Rails.application.class.parent_name.nil? ? '' : Digest::SHA256.hexdigest(Rails.application.class.parent_name.downcase).to_s
-  CACHE_NAMESPACE = CACHE_NAMESPACE_HASH + '_oauth_token_service'
+  CACHE_NAMESPACE = 'oauth_token_service'
   ISSUER_JWKS_KEY = 'issuer-jwks'
   ACCESS_TOKEN = 'access-token'
 
   def fetch_access_token
-    @access_token = Rails.cache&.read(ACCESS_TOKEN, namespace: CACHE_NAMESPACE)
+    @access_token = Rails.cache&.read(ACCESS_TOKEN, namespace: namespace)
     @access_token = request_access_token if @access_token.nil?
 
     @access_token
   end
 
   def fetch_signing_key
-    Rails.cache.nil? ? download_signing_key : Rails.cache.fetch(ISSUER_JWKS_KEY, namespace: CACHE_NAMESPACE) { download_signing_key }
+    Rails.cache.nil? ? download_signing_key : Rails.cache.fetch(ISSUER_JWKS_KEY, namespace: namespace) { download_signing_key }
   end
 
   def clear_cache_if_available
-    Rails.cache&.clear(namespace: CACHE_NAMESPACE)
+    Rails.cache&.clear(namespace: namespace)
   end
 
   def download_signing_key
@@ -50,7 +49,7 @@ module TokenValidator::TokenCacheHelper
       Rails.cache&.write(
         ACCESS_TOKEN,
         access_token,
-        namespace: CACHE_NAMESPACE,
+        namespace: namespace,
         expires_in: access_token[:expires_in] - 3.minutes
       )
     end
@@ -62,5 +61,14 @@ module TokenValidator::TokenCacheHelper
 
   def oauth_path(action)
     "#{TokenValidator::ValidatorConfig.config[:issuer_url]}/oauth/#{action}"
+  end
+
+  private
+
+  def namespace
+    # We do not use a cache for unit tests
+    # :nocov:
+    "#{Digest::SHA256.hexdigest(Rails.application.class.parent_name.downcase)}_#{CACHE_NAMESPACE}"
+    # :nocov:
   end
 end

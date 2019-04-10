@@ -1,7 +1,7 @@
 version: 2
 jobs:
   build:
-    parallelism: 2
+    parallelism: 1
     working_directory: ~/token_validator
     docker:
       - image: circleci/ruby:2.5.3

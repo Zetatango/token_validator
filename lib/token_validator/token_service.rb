@@ -115,7 +115,7 @@ class TokenValidator::TokenService
 
   def valid_url?(url)
     uri = URI.parse(url)
-    (uri.is_a?(URI::HTTPS) || (uri.is_a?(URI::HTTP) && (Rails.env.development? || Rails.env.test?))) && uri.host.present?
+    (uri.is_a?(URI::HTTPS) || (uri.is_a?(URI::HTTP) && !Rails.env.production?)) && uri.host.present?
   end
 
   def valid_issuer?

@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    token_validator (0.3.2)
+    token_validator (0.4.0)
       jose
       json-jwt
       jwt
@@ -112,7 +112,7 @@ GEM
     minitest (5.11.3)
     netrc (0.11.0)
     nio4r (2.3.1)
-    nokogiri (1.10.2)
+    nokogiri (1.10.3)
       mini_portile2 (~> 2.4.0)
     parallel (1.17.0)
     parser (2.6.2.1)
@@ -173,6 +173,8 @@ GEM
       rainbow (>= 2.2.2, < 4.0)
       ruby-progressbar (~> 1.7)
       unicode-display_width (>= 1.4.0, < 1.6)
+    rubocop-performance (1.1.0)
+      rubocop (>= 0.67.0)
     rubocop-rspec (1.32.0)
       rubocop (>= 0.60.0)
     rubocop_runner (2.1.0)
@@ -223,6 +225,7 @@ DEPENDENCIES
   rspec-mocks
   rspec_junit_formatter
   rubocop
+  rubocop-performance
   rubocop-rspec
   rubocop_runner
   simplecov
@@ -230,5 +233,8 @@ DEPENDENCIES
   token_validator!
   webmock
 
+RUBY VERSION
+   ruby 2.6.3p62
+
 BUNDLED WITH
-   1.17.3
+   2.0.1

@@ -14,7 +14,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   before do
     TokenValidator::ValidatorConfig.configure(issuer_url: issuer_url, audience: audience)
 
-    TokenValidator::TokenService.clear
+    described_class.clear
   end
 
   def stub_jwks_response
@@ -88,87 +88,87 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   it "with malformed access token is not valid" do
-    service = TokenValidator::TokenService.new(SecureRandom.base64(32) + "." + SecureRandom.base64(32) + "." + SecureRandom.base64(32), expected_scopes)
+    service = described_class.new(SecureRandom.base64(32) + "." + SecureRandom.base64(32) + "." + SecureRandom.base64(32), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (scope) is not valid" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(delete_keys: [:scopes]), expected_scopes)
+    service = described_class.new(access_token(delete_keys: [:scopes]), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (scope is incorrect) is not valid" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(scopes: ['idp:api']), %w[test:api])
+    service = described_class.new(access_token(scopes: ['idp:api']), %w[test:api])
     expect(service.valid_access_token?).to be false
   end
 
   it 'with invalid access token (multiple scopes are missing) is not valid' do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(scopes: ['idp:api']), %w[test:api test:internal])
+    service = described_class.new(access_token(scopes: ['idp:api']), %w[test:api test:internal])
     expect(service.valid_access_token?).to be false
   end
 
   it 'with invalid access token (multiple scopes, only one matches) is invalid' do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(scopes: %w[test:internal]), %w[test:api test:internal])
+    service = described_class.new(access_token(scopes: %w[test:internal]), %w[test:api test:internal])
     expect(service.valid_access_token?).to be false
   end
 
   it 'with valid access token (multiple scopes match) is valid' do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(scopes: %w[test:api test:internal]), %w[test:api test:internal])
+    service = described_class.new(access_token(scopes: %w[test:api test:internal]), %w[test:api test:internal])
     expect(service.valid_access_token?).to be true
   end
 
   it 'with valid access token (multiple scopes, all match) is valid' do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(scopes: %w[test:api test:internal idp:api]), %w[test:api test:internal])
+    service = described_class.new(access_token(scopes: %w[test:api test:internal idp:api]), %w[test:api test:internal])
     expect(service.valid_access_token?).to be true
   end
 
   it "with invalid access token (signature) is not valid" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(valid_signature: false), expected_scopes)
+    service = described_class.new(access_token(valid_signature: false), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer not present) is not valid" do
-    service = TokenValidator::TokenService.new(access_token(delete_keys: [:iss]), expected_scopes)
+    service = described_class.new(access_token(delete_keys: [:iss]), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer empty) is not valid" do
-    service = TokenValidator::TokenService.new(access_token(issuer: ''), expected_scopes)
+    service = described_class.new(access_token(issuer: ''), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer has http endpoint) is not valid" do
-    service = TokenValidator::TokenService.new(access_token(issuer: 'http://example.com/.well-known/jwks.json'), expected_scopes)
+    service = described_class.new(access_token(issuer: 'http://example.com/.well-known/jwks.json'), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer has unknown host) is not valid" do
-    service = TokenValidator::TokenService.new(access_token(issuer: 'https://www.evil.com/.well-known/jwks.json'), expected_scopes)
+    service = described_class.new(access_token(issuer: 'https://www.evil.com/.well-known/jwks.json'), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (subject not present) is not valid" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(delete_keys: %i[sub]), expected_scopes)
+    service = described_class.new(access_token(delete_keys: %i[sub]), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with partner_guid not present is valid" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token(delete_keys: %i[partner_guid]), expected_scopes)
+    service = described_class.new(access_token(delete_keys: %i[partner_guid]), expected_scopes)
     expect(service.valid_access_token?).to be true
   end
 
   it "with valid access token requests signature verification key" do
     stub_jwks_response
-    service = TokenValidator::TokenService.new(access_token, expected_scopes)
+    service = described_class.new(access_token, expected_scopes)
     expect(service.valid_access_token?).to be true
     assert_requested :get, "#{issuer_url}/oauth/discovery/keys"
   end
@@ -180,7 +180,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
       .then
       .to_return(status: 200, body: verification_jwks.to_json)
 
-    TokenValidator::TokenService.new(access_token, expected_scopes).valid_access_token?
+    described_class.new(access_token, expected_scopes).valid_access_token?
     assert_requested :get, "#{issuer_url}/oauth/discovery/keys", times: 2
   end
 
@@ -189,7 +189,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
     stub_request(:get, "#{issuer_url}/oauth/discovery/keys")
       .to_raise(Errno::ECONNREFUSED)
 
-    service = TokenValidator::TokenService.new(access_token, expected_scopes)
+    service = described_class.new(access_token, expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
@@ -198,7 +198,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
     stub_request(:get, "#{issuer_url}/oauth/discovery/keys")
       .to_raise(Errno::ETIMEDOUT)
 
-    service = TokenValidator::TokenService.new(access_token, expected_scopes)
+    service = described_class.new(access_token, expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 end

@@ -4,7 +4,7 @@ require 'spec_helper'
 
 RSpec.describe TokenValidator::OauthTokenService, type: :request do
   let(:service) do
-    TokenValidator::OauthTokenService.instance
+    described_class.instance
   end
 
   let(:issuer_url) do

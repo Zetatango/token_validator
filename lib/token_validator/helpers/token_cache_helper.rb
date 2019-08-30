@@ -68,7 +68,7 @@ module TokenValidator::TokenCacheHelper
   def namespace
     # We do not use a cache for unit tests
     # :nocov:
-    "#{Digest::SHA256.hexdigest(Rails.application.class.parent_name.downcase)}_#{CACHE_NAMESPACE}"
+    "#{Digest::SHA256.hexdigest(Rails.application.class.module_parent_name.downcase)}_#{CACHE_NAMESPACE}"
     # :nocov:
   end
 end

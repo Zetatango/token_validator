@@ -2,12 +2,14 @@
 
 if ENV['COVERAGE'] || ENV['CI']
   require 'simplecov'
+  require 'codacy-coverage'
   require 'codecov'
 
   SimpleCov.formatter = SimpleCov::Formatter::MultiFormatter.new(
     [
       SimpleCov::Formatter::Codecov,
-      SimpleCov::Formatter::HTMLFormatter
+      SimpleCov::Formatter::HTMLFormatter,
+      Codacy::Formatter
     ]
   )
 
@@ -23,6 +25,8 @@ require 'timecop'
 require 'webmock/rspec'
 
 Dir[File.join(Dir.pwd, 'lib', 'token_validator.rb')].sort.each { |file| require file }
+
+WebMock.disable_net_connect!(allow: 'https://api.codacy.com')
 
 RSpec.configure do |config|
   # rspec-expectations config goes here. You can use an alternate

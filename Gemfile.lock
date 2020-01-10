@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    token_validator (0.5.1)
+    token_validator (0.6.0)
       jose
       json-jwt
       jwt

@@ -37,6 +37,33 @@ $ gem install token_validator
 ## Development
 Development on this project should occur on separate feature branches and pull requests should be submitted. When submitting a pull request, the pull request comment template should be filled out as much as possible to ensure a quick review and increase the likelihood of the pull request being accepted.
 
+### Ruby
+
+This application requires:
+
+*   Ruby version: 2.7.0
+
+If you do not have Ruby installed, it is recommended you use ruby-install and chruby to manage Ruby versions.
+
+```bash
+brew install ruby-install chruby
+ruby-install ruby 2.7.0
+```
+
+Add the following lines to ~/.bash_profile:
+
+```bash
+source /usr/local/opt/chruby/share/chruby/chruby.sh
+source /usr/local/opt/chruby/share/chruby/auto.sh
+```
+
+Set Ruby version to 2.7.0:
+
+```bash
+source ~/.bash_profile
+chruby 2.7.0
+```
+
 ### Running Tests
 ```ruby
 rspec # Without code coverage

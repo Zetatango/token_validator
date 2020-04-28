@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    token_validator (0.6.0)
+    token_validator (0.6.1)
       jose
       json-jwt
       jwt
@@ -111,7 +111,7 @@ GEM
       aes_key_wrap
       bindata
     jwt (2.2.1)
-    loofah (2.4.0)
+    loofah (2.5.0)
       crass (~> 1.0.2)
       nokogiri (>= 1.5.9)
     mail (2.7.1)
@@ -254,7 +254,7 @@ DEPENDENCIES
   webmock
 
 RUBY VERSION
-   ruby 2.7.0p0
+   ruby 2.7.1p83
 
 BUNDLED WITH
    2.1.4

@@ -84,10 +84,12 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
   it 'returns hash for valid token' do
     valid_token = SecureRandom.hex(32)
 
+    # rubocop:disable Style/StringConcatenation
     stub_request(:get, "#{issuer_url}/oauth/token/info")
       .with(headers: { 'Authorization' => "Bearer #{valid_token}" })
       .to_return(status: 200, body: '{"resource_owner_id":null,"scopes":["idp:api"],"expires_in_seconds":200,' \
         '"application":{"uid":"' + SecureRandom.hex(32) + '"},"created_at":' + 1.hour.ago.utc.to_i.to_s + '}')
+    # rubocop:enable Style/StringConcatenation
     expect(service.get_token_info(valid_token)).not_to be nil
   end
 

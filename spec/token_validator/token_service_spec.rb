@@ -88,7 +88,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   it "with malformed access token is not valid" do
-    service = described_class.new(SecureRandom.base64(32) + "." + SecureRandom.base64(32) + "." + SecureRandom.base64(32), expected_scopes)
+    service = described_class.new("#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}", expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 

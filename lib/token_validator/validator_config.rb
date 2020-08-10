@@ -20,7 +20,7 @@ class TokenValidator::ValidatorConfig
   end
 
   def self.logger
-    @logger ||= Rails.logger.nil? ? Logger.new(STDOUT) : Rails.logger
+    @logger ||= Rails.logger.nil? ? Logger.new($stdout) : Rails.logger
     @logger
   end
 

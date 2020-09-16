@@ -110,10 +110,10 @@ RSpec.describe TokenValidator::TokenService, type: :request do
     expect(service.valid_access_token?).to be false
   end
 
-  it 'with invalid access token (multiple scopes, only one matches) is invalid' do
+  it 'with valid access token (multiple scopes, one matches) is valid' do
     stub_jwks_response
     service = described_class.new(access_token(scopes: %w[test:internal]), %w[test:api test:internal])
-    expect(service.valid_access_token?).to be false
+    expect(service.valid_access_token?).to be true
   end
 
   it 'with valid access token (multiple scopes match) is valid' do

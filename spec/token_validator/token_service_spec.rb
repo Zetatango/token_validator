@@ -128,6 +128,18 @@ RSpec.describe TokenValidator::TokenService, type: :request do
     expect(service.valid_access_token?).to be true
   end
 
+  it 'with valid access token (no scopes expected, none given) is valid' do
+    stub_jwks_response
+    service = described_class.new(access_token(scopes: []), [])
+    expect(service.valid_access_token?).to be true
+  end
+
+  it 'with valid access token (no scopes expected, some given) is valid' do
+    stub_jwks_response
+    service = described_class.new(access_token(scopes: ['idp:api']), [])
+    expect(service.valid_access_token?).to be true
+  end
+
   it "with invalid access token (signature) is not valid" do
     stub_jwks_response
     service = described_class.new(access_token(valid_signature: false), expected_scopes)

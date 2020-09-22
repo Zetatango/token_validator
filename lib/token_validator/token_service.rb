@@ -51,6 +51,7 @@ class TokenValidator::TokenService
 
   def valid_scope?
     raise InvalidScope, 'Missing scopes' unless decoded_jwt.key?('scopes')
+    return true if @expected_scopes.blank?
 
     valid = false
     @expected_scopes.each do |scope|

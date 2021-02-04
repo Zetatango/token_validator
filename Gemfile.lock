@@ -83,7 +83,7 @@ GEM
       thor (>= 0.18, < 2)
     codacy-coverage (2.2.1)
       simplecov
-    codecov (0.4.2)
+    codecov (0.4.3)
       simplecov (>= 0.15, < 0.22)
     concurrent-ruby (1.1.7)
     crack (0.4.5)

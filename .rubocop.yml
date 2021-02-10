@@ -179,6 +179,9 @@ Lint/TopLevelReturnWithArgument:
 Lint/UnreachableLoop:
   Enabled: true
 
+Layout/EmptyLineBetweenDefs:
+  Enabled: false
+
 Style/ExplicitBlockArgument:
   Enabled: true
 

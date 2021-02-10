@@ -19,7 +19,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     end
   end
 
-  # rubocop:disable RSpec/LeakyConstantDeclaration
+  # rubocop:disable RSpec/LeakyConstantDeclaration, Lint/ConstantDefinitionInBlock
   class DummyEndpoint
     def initialize(scopes = ['ztt:api'])
       @scopes = scopes
@@ -31,7 +31,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
       # rubocop:enable RSpec/InstanceVariable
     end
   end
-  # rubocop:enable RSpec/LeakyConstantDeclaration
+  # rubocop:enable RSpec/LeakyConstantDeclaration, Lint/ConstantDefinitionInBlock
 
   def setup_env(opts)
     endpoint = DummyEndpoint.new opts[:scopes]

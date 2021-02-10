@@ -11,21 +11,13 @@ class TokenValidator::TokenService
   end
 
   class JwtFormatException < TokenServiceException; end
-
   class InvalidIssuerException < TokenServiceException; end
-
   class InvalidSignatureException < TokenServiceException; end
-
   class InvalidSignatureKeyException < TokenServiceException; end
-
   class InvalidAudienceException < TokenServiceException; end
-
   class ExpiredJwtException < TokenServiceException; end
-
   class MissingAccessTokenField < TokenServiceException; end
-
   class ReplayedJwtException < TokenServiceException; end
-
   class InvalidScope < TokenServiceException; end
 
   def self.clear

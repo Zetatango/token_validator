@@ -31,7 +31,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'json-jwt'
   spec.add_dependency 'jwt'
   spec.add_dependency 'rack'
-  spec.add_dependency 'rails'
+  spec.add_dependency 'rails', '>= 7.0.0'
   spec.add_dependency 'rest-client'
   spec.add_dependency 'webmock'
 

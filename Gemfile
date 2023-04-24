@@ -3,6 +3,7 @@
 ruby '3.2.2'
 
 source 'https://rubygems.org'
+gem 'jose', git: 'https://github.com/potatosalad/ruby-jose'
 git_source(:github) { |repo| "https://github.com/#{repo}.git" }
 
 # Declare your gem's dependencies in token_validator.gemspec.

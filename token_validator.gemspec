@@ -38,7 +38,6 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency 'bundler-audit'
   spec.add_development_dependency 'codacy-coverage'
   spec.add_development_dependency 'codecov'
-  spec.add_development_dependency 'jose'
   spec.add_development_dependency 'json-jwt'
   spec.add_development_dependency 'jwt'
   spec.add_development_dependency 'rack'

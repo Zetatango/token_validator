@@ -1,3 +1,10 @@
+GIT
+  remote: https://github.com/potatosalad/ruby-jose
+  revision: e1be589b889f1e59ac233a5d19a3fa13f1e4b8a0
+  specs:
+    jose (1.1.3)
+      hamster
+
 PATH
   remote: .
   specs:
@@ -117,8 +124,6 @@ GEM
       domain_name (~> 0.5)
     i18n (1.12.0)
       concurrent-ruby (~> 1.0)
-    jose (1.1.3)
-      hamster
     json (2.6.3)
     json-jwt (1.16.3)
       activesupport (>= 4.2)
@@ -269,7 +274,7 @@ DEPENDENCIES
   bundler-audit
   codacy-coverage
   codecov
-  jose
+  jose!
   json-jwt
   jwt
   rack

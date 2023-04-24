@@ -31,7 +31,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   def generate_key(kid = nil)
-    jwk = JOSE::JWK.generate_key([:rsa, 4096])
+    jwk = JOSE::JWK.generate_key([:rsa, 4096, 17])
     jwk.merge('kid' => kid.nil? ? key_id : kid,
               'use' => 'sig')
   end

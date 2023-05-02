@@ -34,6 +34,7 @@ class TokenValidator::TokenService
   end
 
   def valid_access_token?
+
     valid_structure? && !expired?
   rescue JSON::JWT::InvalidFormat => e
     TokenValidator::ValidatorConfig.logger.error "Invalid JWT format: #{e.message}"
@@ -43,6 +44,8 @@ class TokenValidator::TokenService
     false
   end
 
+  def refresh!(refresh_token, params = {}); end
+
   private
 
   def valid_structure?
@@ -50,12 +53,13 @@ class TokenValidator::TokenService
   end
 
   def valid_scope?
-    raise InvalidScope, 'Missing scopes' unless decoded_jwt.key?('scopes')
+    token_scope = scope(decoded_jwt)
+    raise InvalidScope, 'Missing scopes' unless token_scope.present?
     return true if @expected_scopes.blank?
 
     valid = false
     @expected_scopes.each do |scope|
-      valid ||= decoded_jwt['scopes'].include? scope
+      valid ||= token_scope.include? scope
     end
 
     raise InvalidScope, "Missing scope: require at least one of #{@expected_scopes}" unless valid
@@ -78,6 +82,8 @@ class TokenValidator::TokenService
   end
 
   def valid_audience?
+    puts "decoded_jwt['aud']=#{decoded_jwt['aud']}"
+    puts "TokenValidator::ValidatorConfig.config[:audience]=#{TokenValidator::ValidatorConfig.config[:audience]}"
     raise InvalidAudienceException, 'Invalid audience' unless decoded_jwt['aud'].include? TokenValidator::ValidatorConfig.config[:audience]
 
     true
@@ -88,7 +94,7 @@ class TokenValidator::TokenService
 
     raise InvalidSignatureKeyException, 'Could not match token\'s kid with jwks from issuer' if jwk.nil?
 
-    verified = JOSE::JWT.verify_strict(jwk, ['RS512'], @access_token)[0]
+    verified = JOSE::JWT.verify_strict(jwk, %w[RS256 RS512], @access_token)[0]
 
     raise InvalidSignatureException, 'Invalid signature' unless verified
 
@@ -109,10 +115,22 @@ class TokenValidator::TokenService
     return nil if jwks.blank?
 
     jwks.each do |key|
-      return key if key['kid'] == decoded_jwt['kid']
+      return key if key['kid'] == kid(decoded_jwt)
     end
 
     nil
+  end
+
+  def kid(decoded_jwt)
+    return decoded_jwt['kid'] if decoded_jwt.key?('kid')
+
+    decoded_jwt.header['kid']
+  end
+
+  def scope(decoded_jwt)
+    return decoded_jwt['scopes'] if decoded_jwt.key?('scopes')
+
+    decoded_jwt['scope']
   end
 
   def valid_url?(url)

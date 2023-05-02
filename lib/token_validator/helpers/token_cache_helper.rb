@@ -8,6 +8,7 @@ module TokenValidator::TokenCacheHelper
 
   CACHE_NAMESPACE = 'oauth_token_service'
   ISSUER_JWKS_KEY = 'issuer-jwks'
+  OPENID_CONFIGURATION_KEY = 'openid-configuration'
   ACCESS_TOKEN = 'access-token'
 
   def fetch_access_token
@@ -27,15 +28,16 @@ module TokenValidator::TokenCacheHelper
 
   def download_signing_key
     jwks = JSON.parse(
-      RestClient.get(oauth_path('discovery/keys'))
+      RestClient.get(openid_configuration[:jwks_uri])
     ).with_indifferent_access
     JSON::JWK::Set.new jwks[:keys]
-  rescue Errno::ECONNREFUSED, RestClient::Exception
+  rescue Errno::ECONNREFUSED, RestClient::Exception => e
+    TokenValidator::ValidatorConfig.logger.error "Unable to access jwks_uri endpoint: #{e.message}"
     nil
   end
 
   def request_access_token
-    response = RestClient.post(oauth_path(:token), grant_type: :client_credentials,
+    response = RestClient.post(openid_configuration[:token_endpoint], grant_type: :client_credentials,
                                                    client_id: TokenValidator::ValidatorConfig.config[:client_id],
                                                    client_secret: TokenValidator::ValidatorConfig.config[:client_secret],
                                                    scope: TokenValidator::ValidatorConfig.config[:requested_scope])
@@ -55,15 +57,26 @@ module TokenValidator::TokenCacheHelper
     end
 
     access_token
-  rescue Errno::ECONNREFUSED, RestClient::Exception
+  rescue Errno::ECONNREFUSED, RestClient::Exception => e
+    puts TokenValidator::ValidatorConfig.config
+    TokenValidator::ValidatorConfig.logger.error "Unable to access token endpoint #{openid_configuration[:token_endpoint]}: #{e.message}"
     nil
   end
 
-  def oauth_path(action)
-    "#{TokenValidator::ValidatorConfig.config[:issuer_url]}/oauth/#{action}"
+  def openid_configuration
+    Rails.cache.nil? ? download_openid_configuration : Rails.cache.fetch(OPENID_CONFIGURATION_KEY, namespace: namespace) { download_openid_configuration }
   end
 
   private
+
+  def download_openid_configuration
+    url = "#{TokenValidator::ValidatorConfig.config[:issuer_url]}.well-known/openid-configuration"
+    response = RestClient.get(url)
+    JSON.parse(response.body, symbolize_names: true)
+  rescue Errno::ECONNREFUSED, RestClient::Exception => e
+    TokenValidator::ValidatorConfig.logger.error "Unable to access configuration endpoint #{url}: #{e.message}"
+    raise e
+  end
 
   def namespace
     # We do not use a cache for unit tests

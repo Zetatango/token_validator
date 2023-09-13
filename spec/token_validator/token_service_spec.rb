@@ -23,29 +23,23 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   def verification_jwks
-    { keys: [JSON.parse(verification_key.to_binary)] }
+    { keys: [verification_key] }
   end
 
   def key_id
     @key_id ||= SecureRandom.uuid
   end
 
-  def generate_key(kid = nil)
-    jwk = JOSE::JWK.generate_key([:rsa, 4096])
-    jwk.merge('kid' => kid.nil? ? key_id : kid,
-              'use' => 'sig')
+  def generate_key
+    OpenSSL::PKey::RSA.generate 4096
   end
 
   def current_key
     @current_key ||= generate_key
   end
 
-  def signing_key
-    current_key
-  end
-
   def verification_key
-    current_key.to_public
+    current_key.public_key.to_jwk('kid' => key_id)
   end
 
   # rubocop:disable Metrics/CyclomaticComplexity
@@ -76,9 +70,9 @@ RSpec.describe TokenValidator::TokenService, type: :request do
       payload.delete key
     end
 
-    return JOSE::JWT.sign(signing_key, { 'alg' => 'RS512' }, payload).compact if valid_signature
+    return JWT.encode(payload, current_key, 'RS512') if valid_signature
 
-    JOSE::JWT.sign(generate_key, { 'alg' => 'RS512' }, payload).compact
+    JWT.encode(payload, generate_key, 'RS512')
   end
   # rubocop:enable Metrics/CyclomaticComplexity
   # rubocop:enable Metrics/PerceivedComplexity
@@ -188,7 +182,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   it "with incorrect cached signature verification key results in two request for signature verification key" do
     WebMock.reset!
     stub_request(:get, "#{issuer_url}/oauth/discovery/keys")
-      .to_return(status: 200, body: { keys: [JSON.parse(generate_key(SecureRandom.uuid).to_public.to_binary)] }.to_json)
+      .to_return(status: 200, body: { keys: [generate_key.public_key.to_jwk] }.to_json)
       .then
       .to_return(status: 200, body: verification_jwks.to_json)
 

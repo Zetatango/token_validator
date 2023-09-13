@@ -18,7 +18,7 @@ if ENV['COVERAGE'] || ENV['CI']
   end
 end
 
-require 'jose'
+require 'jwt'
 require 'json/jwt'
 require 'rails'
 require 'timecop'

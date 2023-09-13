@@ -4,8 +4,8 @@ jobs:
     parallelism: 1
     working_directory: ~/token_validator
     docker:
-      - image: circleci/ruby:3.0.2
-
+      - image: cimg/ruby:3.2.2
+        
     steps:
       - checkout
 

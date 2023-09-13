@@ -30,12 +30,12 @@ class TokenValidator::TokenService
   end
 
   def decoded_jwt
-    @decoded_jwt ||= JSON::JWT.decode @access_token, :skip_verification
+    @decoded_jwt = JWT.decode(@access_token, nil, false)&.first
   end
 
   def valid_access_token?
     valid_structure? && !expired?
-  rescue JSON::JWT::InvalidFormat => e
+  rescue JWT::DecodeError => e
     TokenValidator::ValidatorConfig.logger.error "Invalid JWT format: #{e.message}"
     false
   rescue TokenServiceException => e
@@ -46,7 +46,7 @@ class TokenValidator::TokenService
   private
 
   def valid_structure?
-    valid_issuer? && valid_signature? && valid_audience? && valid_contents? && valid_scope?
+    valid_issuer? && valid_signature? && valid_contents? && valid_scope?
   end
 
   def valid_scope?
@@ -88,11 +88,27 @@ class TokenValidator::TokenService
 
     raise InvalidSignatureKeyException, 'Could not match token\'s kid with jwks from issuer' if jwk.nil?
 
-    verified = JOSE::JWT.verify_strict(jwk, ['RS512'], @access_token)[0]
+    # verify_iss duplicates what valid_issuer?, left here for future references
+    # removing valid_issuer? requires a full rewrite of tests because of order of operations
+    verification_options = {
+      algorithm: 'RS512',
+      verify_expiration: true,  # Verify token expiration (exp claim)
+      verify_not_before: true,  # Verify not before (nbf claim)
+      verify_iss: TokenValidator::ValidatorConfig.config[:issuer_url], # Verify issuer (iss claim)
+      verify_aud: TokenValidator::ValidatorConfig.config[:audience]  # Verify audience (aud claim)
+    }
+
+    verified = JWT.decode(@access_token, jwk.to_key, true, verification_options)[0]
 
     raise InvalidSignatureException, 'Invalid signature' unless verified
 
     true
+  rescue JWT::ExpiredSignature
+    raise ExpiredJwtException, 'Access token is expired'
+  rescue JWT::ImmatureSignature
+    raise InvalidSignatureException, 'Invalid signature'
+  rescue JWT::InvalidIssuerError
+    raise InvalidIssuerException, 'Invalid issuer'
   end
 
   def find_jwk

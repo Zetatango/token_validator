@@ -30,7 +30,7 @@ class TokenValidator::TokenService
   end
 
   def decoded_jwt
-    @decoded_jwt = JWT.decode(@access_token, nil, false)&.first
+    @decoded_jwt = JWT.decode(@access_token, nil, false)&.first&.with_indifferent_access
   end
 
   def valid_access_token?

@@ -94,8 +94,10 @@ class TokenValidator::TokenService
       algorithm: 'RS512',
       verify_expiration: true,  # Verify token expiration (exp claim)
       verify_not_before: true,  # Verify not before (nbf claim)
-      verify_iss: TokenValidator::ValidatorConfig.config[:issuer_url], # Verify issuer (iss claim)
-      verify_aud: TokenValidator::ValidatorConfig.config[:audience]  # Verify audience (aud claim)
+      aud: TokenValidator::ValidatorConfig.config[:audience],
+      verify_aud: true,
+      iss: TokenValidator::ValidatorConfig.config[:issuer_url], # Verify issuer (iss claim)
+      verify_iss: true  # Verify audience (aud claim)
     }
 
     verified = JWT.decode(@access_token, jwk.to_key, true, verification_options)[0]
@@ -109,6 +111,10 @@ class TokenValidator::TokenService
     raise InvalidSignatureException, 'Invalid signature'
   rescue JWT::InvalidIssuerError
     raise InvalidIssuerException, 'Invalid issuer'
+  rescue JWT::InvalidAudError
+    raise InvalidAudienceException, 'Invalid audience'
+  rescue JWT::DecodeError
+    raise JwtFormatException, 'Invalid token'
   end
 
   def find_jwk

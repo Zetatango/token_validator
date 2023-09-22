@@ -46,7 +46,7 @@ class TokenValidator::TokenService
   private
 
   def valid_structure?
-    valid_issuer? && valid_signature? && valid_contents? && valid_scope?
+    valid_signature? && valid_contents? && valid_scope?
   end
 
   def valid_scope?
@@ -107,8 +107,6 @@ class TokenValidator::TokenService
     true
   rescue JWT::ExpiredSignature
     raise ExpiredJwtException, 'Access token is expired'
-  rescue JWT::ImmatureSignature
-    raise InvalidSignatureException, 'Invalid signature'
   rescue JWT::InvalidIssuerError
     raise InvalidIssuerException, 'Invalid issuer'
   rescue JWT::InvalidAudError
@@ -140,16 +138,5 @@ class TokenValidator::TokenService
   def valid_url?(url)
     uri = URI.parse(url)
     (uri.is_a?(URI::HTTPS) || (uri.is_a?(URI::HTTP) && !Rails.env.production?)) && uri.host.present?
-  end
-
-  def valid_issuer?
-    raise InvalidIssuerException, 'No issuer present' unless decoded_jwt.key?('iss')
-
-    issuer = decoded_jwt['iss']
-
-    raise InvalidIssuerException, 'Issuer must be a valid url' unless valid_url? issuer
-    raise InvalidIssuerException, 'Invalid issuer' unless issuer == TokenValidator::ValidatorConfig.config[:issuer_url]
-
-    true
   end
 end

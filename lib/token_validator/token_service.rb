@@ -35,9 +35,6 @@ class TokenValidator::TokenService
 
   def valid_access_token?
     valid_structure? && !expired?
-  rescue JWT::DecodeError => e
-    TokenValidator::ValidatorConfig.logger.error "Invalid JWT format: #{e.message}"
-    false
   rescue TokenServiceException => e
     TokenValidator::ValidatorConfig.logger.error "Invalid access token: #{e.message}"
     false
@@ -75,12 +72,6 @@ class TokenValidator::TokenService
     raise ExpiredJwtException, 'Access token is expired' if expired
 
     false
-  end
-
-  def valid_audience?
-    raise InvalidAudienceException, 'Invalid audience' unless decoded_jwt['aud'].include? TokenValidator::ValidatorConfig.config[:audience]
-
-    true
   end
 
   def valid_signature?

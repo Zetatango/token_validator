@@ -30,14 +30,11 @@ class TokenValidator::TokenService
   end
 
   def decoded_jwt
-    @decoded_jwt ||= JSON::JWT.decode @access_token, :skip_verification
+    @decoded_jwt = JWT.decode(@access_token, nil, false)&.first&.with_indifferent_access
   end
 
   def valid_access_token?
     valid_structure? && !expired?
-  rescue JSON::JWT::InvalidFormat => e
-    TokenValidator::ValidatorConfig.logger.error "Invalid JWT format: #{e.message}"
-    false
   rescue TokenServiceException => e
     TokenValidator::ValidatorConfig.logger.error "Invalid access token: #{e.message}"
     false
@@ -46,7 +43,7 @@ class TokenValidator::TokenService
   private
 
   def valid_structure?
-    valid_issuer? && valid_signature? && valid_audience? && valid_contents? && valid_scope?
+    valid_signature? && valid_contents? && valid_scope?
   end
 
   def valid_scope?
@@ -77,22 +74,36 @@ class TokenValidator::TokenService
     false
   end
 
-  def valid_audience?
-    raise InvalidAudienceException, 'Invalid audience' unless decoded_jwt['aud'].include? TokenValidator::ValidatorConfig.config[:audience]
-
-    true
-  end
-
   def valid_signature?
     jwk = find_jwk
 
     raise InvalidSignatureKeyException, 'Could not match token\'s kid with jwks from issuer' if jwk.nil?
 
-    verified = JOSE::JWT.verify_strict(jwk, ['RS512'], @access_token)[0]
+    # verify_iss duplicates what valid_issuer?, left here for future references
+    # removing valid_issuer? requires a full rewrite of tests because of order of operations
+    verification_options = {
+      algorithm: 'RS512',
+      verify_expiration: true,  # Verify token expiration (exp claim)
+      verify_not_before: true,  # Verify not before (nbf claim)
+      aud: TokenValidator::ValidatorConfig.config[:audience],
+      verify_aud: true,
+      iss: TokenValidator::ValidatorConfig.config[:issuer_url], # Verify issuer (iss claim)
+      verify_iss: true  # Verify audience (aud claim)
+    }
+
+    verified = JWT.decode(@access_token, jwk.to_key, true, verification_options)[0]
 
     raise InvalidSignatureException, 'Invalid signature' unless verified
 
     true
+  rescue JWT::ExpiredSignature
+    raise ExpiredJwtException, 'Access token is expired'
+  rescue JWT::InvalidIssuerError
+    raise InvalidIssuerException, 'Invalid issuer'
+  rescue JWT::InvalidAudError
+    raise InvalidAudienceException, 'Invalid audience'
+  rescue JWT::DecodeError
+    raise JwtFormatException, 'Invalid token'
   end
 
   def find_jwk
@@ -113,21 +124,5 @@ class TokenValidator::TokenService
     end
 
     nil
-  end
-
-  def valid_url?(url)
-    uri = URI.parse(url)
-    (uri.is_a?(URI::HTTPS) || (uri.is_a?(URI::HTTP) && !Rails.env.production?)) && uri.host.present?
-  end
-
-  def valid_issuer?
-    raise InvalidIssuerException, 'No issuer present' unless decoded_jwt.key?('iss')
-
-    issuer = decoded_jwt['iss']
-
-    raise InvalidIssuerException, 'Issuer must be a valid url' unless valid_url? issuer
-    raise InvalidIssuerException, 'Invalid issuer' unless issuer == TokenValidator::ValidatorConfig.config[:issuer_url]
-
-    true
   end
 end

@@ -23,7 +23,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   def verification_jwks
-    { keys: [JSON.parse(verification_key.to_binary)] }
+    { keys: [verification_key] }
   end
 
   def key_id
@@ -31,9 +31,8 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   def generate_key(kid = nil)
-    jwk = JOSE::JWK.generate_key([:rsa, 4096])
-    jwk.merge('kid' => kid.nil? ? key_id : kid,
-              'use' => 'sig')
+    optional_parameters = { kid: kid.nil? ? key_id : kid, use: 'sig', alg: 'RS512' }
+    JWT::JWK.new(OpenSSL::PKey::RSA.new(4096), optional_parameters)
   end
 
   def current_key
@@ -41,11 +40,11 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   def signing_key
-    current_key
+    current_key.signing_key
   end
 
   def verification_key
-    current_key.to_public
+    current_key.verify_key.to_jwk(kid: key_id)
   end
 
   # rubocop:disable Metrics/CyclomaticComplexity
@@ -57,11 +56,13 @@ RSpec.describe TokenValidator::TokenService, type: :request do
     delete_keys = options.key?(:delete_keys) ? options[:delete_keys] : []
     partner_guid = options.key?(:partner_guid) ? options[:partner_guid] : "p_#{SecureRandom.base58(16)}"
     scopes = options.key?(:scopes) ? options[:scopes] : ['test:api']
+    expiry = options[:expiry] || (Time.now + 30.minutes).to_i
+    issued_at = options[:issued_at] || Time.now.to_i
 
     payload = {
       sub: SecureRandom.hex(64),
-      iat: Time.now.to_i,
-      exp: (Time.now + 30.minutes).to_i,
+      iat: issued_at,
+      exp: expiry,
       jti: SecureRandom.uuid,
       kid: key_id,
       iss: issuer,
@@ -76,9 +77,9 @@ RSpec.describe TokenValidator::TokenService, type: :request do
       payload.delete key
     end
 
-    return JOSE::JWT.sign(signing_key, { 'alg' => 'RS512' }, payload).compact if valid_signature
+    return JWT.encode(payload, signing_key, 'RS512') if valid_signature
 
-    JOSE::JWT.sign(generate_key, { 'alg' => 'RS512' }, payload).compact
+    JWT.encode(payload, generate_key.signing_key, 'RS512')
   end
   # rubocop:enable Metrics/CyclomaticComplexity
   # rubocop:enable Metrics/PerceivedComplexity
@@ -88,6 +89,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   it "with malformed access token is not valid" do
+    stub_jwks_response
     service = described_class.new("#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}", expected_scopes)
     expect(service.valid_access_token?).to be false
   end
@@ -101,6 +103,24 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   it "with invalid access token (scope is incorrect) is not valid" do
     stub_jwks_response
     service = described_class.new(access_token(scopes: ['idp:api']), %w[test:api])
+    expect(service.valid_access_token?).to be false
+  end
+
+  it "with invalid access token (audience is incorrect) is not valid" do
+    stub_jwks_response
+    service = described_class.new(access_token(audience: 'https://example.com/'), %w[test:api])
+    expect(service.valid_access_token?).to be false
+  end
+
+  it "with invalid access token (iat is incorrect) is not valid" do
+    stub_jwks_response
+    service = described_class.new(access_token(issued_at: (Time.now + 30.minutes).to_i), %w[test:api])
+    expect(service.valid_access_token?).to be false
+  end
+
+  it "with invalid access token (exp is incorrect) is not valid" do
+    stub_jwks_response
+    service = described_class.new(access_token(expiry: (Time.now - 1.minutes).to_i), %w[test:api])
     expect(service.valid_access_token?).to be false
   end
 
@@ -147,21 +167,25 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   end
 
   it "with invalid access token (issuer not present) is not valid" do
+    stub_jwks_response
     service = described_class.new(access_token(delete_keys: [:iss]), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer empty) is not valid" do
+    stub_jwks_response
     service = described_class.new(access_token(issuer: ''), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer has http endpoint) is not valid" do
+    stub_jwks_response
     service = described_class.new(access_token(issuer: 'http://example.com/.well-known/jwks.json'), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
 
   it "with invalid access token (issuer has unknown host) is not valid" do
+    stub_jwks_response
     service = described_class.new(access_token(issuer: 'https://www.evil.com/.well-known/jwks.json'), expected_scopes)
     expect(service.valid_access_token?).to be false
   end
@@ -188,7 +212,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   it "with incorrect cached signature verification key results in two request for signature verification key" do
     WebMock.reset!
     stub_request(:get, "#{issuer_url}/oauth/discovery/keys")
-      .to_return(status: 200, body: { keys: [JSON.parse(generate_key(SecureRandom.uuid).to_public.to_binary)] }.to_json)
+      .to_return(status: 200, body: { keys: [generate_key.public_key.to_jwk] }.to_json)
       .then
       .to_return(status: 200, body: verification_jwks.to_json)
 

@@ -12,7 +12,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   let(:audience) { 'https://localhost:3000' }
 
   before do
-    TokenValidator::ValidatorConfig.configure(issuer_url: issuer_url, audience: audience)
+    TokenValidator::ValidatorConfig.configure(issuer_url:, audience:)
 
     described_class.clear
   end
@@ -66,9 +66,9 @@ RSpec.describe TokenValidator::TokenService, type: :request do
       jti: SecureRandom.uuid,
       kid: key_id,
       iss: issuer,
-      aud: aud,
-      partner_guid: partner_guid,
-      scopes: scopes
+      aud:,
+      partner_guid:,
+      scopes:
     }
 
     payload[:merchant_guid] = options[:merchant_guid] if options.key?(:merchant_guid)

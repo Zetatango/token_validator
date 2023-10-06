@@ -58,7 +58,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     allow(mock_service).to receive(:valid_access_token?).and_return(true)
     allow(mock_service).to receive(:decoded_jwt).and_return(token)
 
-    env = setup_env token: token
+    env = setup_env(token:)
     response = strategy_middleware.call env
     expect(response[0]).to eq(200)
   end
@@ -71,7 +71,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     allow(mock_service).to receive(:valid_access_token?).and_return(true)
     allow(mock_service).to receive(:decoded_jwt).and_return(token)
 
-    env = setup_env token: token
+    env = setup_env(token:)
 
     response = strategy_middleware.call env
     expect(response[0]).to eq(401)
@@ -85,7 +85,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     allow(mock_service).to receive(:valid_access_token?).and_return(true)
     allow(mock_service).to receive(:decoded_jwt).and_return(token)
 
-    env = setup_env token: token, scheme: "Basic"
+    env = setup_env token:, scheme: "Basic"
 
     response = strategy_middleware.call env
     expect(response[0]).to eq(400)
@@ -99,7 +99,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     allow(mock_service).to receive(:valid_access_token?).and_return(false)
     allow(mock_service).to receive(:decoded_jwt).and_return(token)
 
-    env = setup_env token: token
+    env = setup_env(token:)
 
     response = strategy_middleware.call env
     expect(response[0]).to eq(401)
@@ -113,7 +113,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     allow(mock_service).to receive(:valid_access_token?).and_return(false)
     allow(mock_service).to receive(:decoded_jwt).and_raise("boom")
 
-    env = setup_env token: token
+    env = setup_env(token:)
 
     response = strategy_middleware.call env
     expect(response[0]).to eq(401)

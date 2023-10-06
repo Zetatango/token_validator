@@ -13,7 +13,7 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
 
   before do
     service.clear
-    TokenValidator::ValidatorConfig.configure(issuer_url: issuer_url)
+    TokenValidator::ValidatorConfig.configure(issuer_url:)
   end
 
   def stub_access_token_response
@@ -106,7 +106,7 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
   it 'returns basic http authorization header for valid token' do
     access_token = SecureRandom.hex(32)
     stub_request(:post, "#{issuer_url}/oauth/token")
-      .to_return(status: 200, body: { access_token: access_token, token_type: :bearer, expires_in: 1800, refresh_token: '',
+      .to_return(status: 200, body: { access_token:, token_type: :bearer, expires_in: 1800, refresh_token: '',
                                       scope: 'test:api' }.to_json)
     expect(service.basic_http_header).to eq(authorization: "Basic #{::Base64.strict_encode64("#{access_token}:")}")
   end

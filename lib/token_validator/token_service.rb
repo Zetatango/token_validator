@@ -88,7 +88,7 @@ class TokenValidator::TokenService
       aud: TokenValidator::ValidatorConfig.config[:audience],
       verify_aud: true,
       iss: TokenValidator::ValidatorConfig.config[:issuer_url], # Verify issuer (iss claim)
-      verify_iss: true  # Verify audience (aud claim)
+      verify_iss: true # Verify audience (aud claim)
     }
 
     verified = JWT.decode(@access_token, jwk.to_key, true, verification_options)[0]

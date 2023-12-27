@@ -91,7 +91,7 @@ GEM
     aes_key_wrap (1.1.0)
     ast (2.4.2)
     base64 (0.2.0)
-    bigdecimal (3.1.4)
+    bigdecimal (3.1.5)
     bindata (2.4.15)
     builder (3.2.4)
     bundler-audit (0.9.1)
@@ -114,7 +114,8 @@ GEM
     drb (2.2.0)
       ruby2_keywords
     erubi (1.12.0)
-    faraday (2.7.10)
+    faraday (2.8.1)
+      base64
       faraday-net_http (>= 2.0, < 3.1)
       ruby2_keywords (>= 0.0.4)
     faraday-follow_redirects (0.3.0)
@@ -133,7 +134,7 @@ GEM
       rdoc
       reline (>= 0.3.8)
     json (2.7.1)
-    json-jwt (1.16.3)
+    json-jwt (1.16.4)
       activesupport (>= 4.2)
       aes_key_wrap
       bindata

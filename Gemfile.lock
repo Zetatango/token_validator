@@ -91,7 +91,7 @@ GEM
     aes_key_wrap (1.1.0)
     ast (2.4.2)
     base64 (0.2.0)
-    bigdecimal (3.1.5)
+    bigdecimal (3.1.6)
     bindata (2.4.15)
     builder (3.2.4)
     bundler-audit (0.9.1)
@@ -103,7 +103,7 @@ GEM
       simplecov (>= 0.15, < 0.22)
     concurrent-ruby (1.2.3)
     connection_pool (2.4.1)
-    crack (0.4.6)
+    crack (1.0.0)
       bigdecimal
       rexml
     crass (1.0.6)
@@ -288,7 +288,7 @@ GEM
       unf_ext
     unf_ext (0.0.8.2)
     unicode-display_width (2.5.0)
-    webmock (3.20.0)
+    webmock (3.22.0)
       addressable (>= 2.8.0)
       crack (>= 0.3.2)
       hashdiff (>= 0.4.0, < 2.0.0)

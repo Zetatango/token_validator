@@ -17,3 +17,6 @@ gemspec
 
 # To use a debugger
 # gem 'byebug', group: [:development, :test]
+
+# Pinning this gem to avoid CVE-2024-34459
+gem 'nokogiri', '1.16.5'

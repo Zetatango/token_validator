@@ -293,12 +293,12 @@ GEM
       unf_ext
     unf_ext (0.0.8.2)
     unicode-display_width (2.5.0)
-    uri (0.13.0)
+    uri (0.13.2)
     webmock (3.23.0)
       addressable (>= 2.8.0)
       crack (>= 0.3.2)
       hashdiff (>= 0.4.0, < 2.0.0)
-    webrick (1.8.1)
+    webrick (1.9.1)
     websocket-driver (0.7.6)
       websocket-extensions (>= 0.1.0)
     websocket-extensions (0.1.5)
@@ -329,7 +329,9 @@ DEPENDENCIES
   simplecov
   timecop
   token_validator!
+  uri (~> 0.13.2)
   webmock
+  webrick (>= 1.8.2)
 
 RUBY VERSION
    ruby 3.2.2p53

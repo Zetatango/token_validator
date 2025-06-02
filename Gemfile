@@ -20,3 +20,9 @@ gemspec
 
 # Pinning this gem to avoid CVE-2024-34459
 gem 'nokogiri', '1.16.5'
+
+# Pinning this gem to avoid CVE-2025-27221
+gem 'uri', '~> 0.13.2'
+
+# Pinning this gem to avoid CVE-2024-47220
+gem 'webrick', '>= 1.8.2'

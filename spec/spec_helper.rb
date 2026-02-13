@@ -24,7 +24,7 @@ require 'rails'
 require 'timecop'
 require 'webmock/rspec'
 
-Dir[File.join(Dir.pwd, 'lib', 'token_validator.rb')].sort.each { |file| require file }
+Dir[File.join(Dir.pwd, 'lib', 'token_validator.rb')].each { |file| require file }
 
 WebMock.disable_net_connect!(allow: 'https://api.codacy.com')
 

@@ -85,7 +85,7 @@ RSpec.describe TokenValidator::TokenService, type: :request do
   # rubocop:enable Metrics/PerceivedComplexity
 
   it "has a version number" do
-    expect(TokenValidator::VERSION).not_to be nil
+    expect(TokenValidator::VERSION).not_to be_nil
   end
 
   it "with malformed access token is not valid" do

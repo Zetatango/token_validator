@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
   spec.homepage    = 'https://github.com/Zetatango/token_validator'
   spec.summary     = 'A library for validating OAuth2 tokens.'
 
-  spec.required_ruby_version = '>= 3.2.2'
+  spec.required_ruby_version = '>= 3.3.0'
 
   # Prevent pushing this gem to RubyGems.org. To allow pushes either set the 'allowed_push_host'
   # to allow pushing to a single host or delete this section to allow pushing to any host.
@@ -22,7 +22,7 @@ Gem::Specification.new do |spec|
     spec.metadata['allowed_push_host'] = "TODO: Set to 'http://mygemserver.com'"
   else
     raise 'RubyGems 2.0 or newer is required to protect against ' \
-      'public gem pushes.'
+          'public gem pushes.'
   end
 
   spec.files = Dir['{app,config,lib}/**/*', 'Rakefile', 'README.md']

@@ -26,12 +26,12 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
 
   it 'IdP is offline' do
     stub_request(:post, "#{issuer_url}/oauth/token").to_raise(Errno::ECONNREFUSED)
-    expect(service.access_token).to be nil
+    expect(service.access_token).to be_nil
   end
 
   it 'IdP is unresponsive' do
     stub_request(:post, "#{issuer_url}/oauth/token").to_raise(Errno::ETIMEDOUT)
-    expect(service.access_token).to be nil
+    expect(service.access_token).to be_nil
   end
 
   it 'handles new oauth token' do
@@ -40,14 +40,14 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
             '{"access_token":"abc123","token_type":"bearer",' \
             '"expires_in":7200,"refresh_token":"",' \
             '"scope":"idp:api"}')
-    expect(service.access_token).not_to be nil
+    expect(service.access_token).not_to be_nil
     expect(service.access_token).to have_key(:token)
     expect(service.access_token).to have_value('abc123')
   end
 
   it 'handles unauthorized response' do
     stub_request(:post, "#{issuer_url}/oauth/token").to_return(status: 401)
-    expect(service.access_token).to be nil
+    expect(service.access_token).to be_nil
   end
 
   it 'gets new token when expired' do
@@ -63,22 +63,22 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
 
   it 'returns nil for empty access token' do
     stub_request(:get, "#{issuer_url}/oauth/token/info").to_return(status: 401)
-    expect(service.get_token_info('')).to be nil
+    expect(service.get_token_info('')).to be_nil
   end
 
   it 'returns nil for invalid access token' do
     stub_request(:get, "#{issuer_url}/oauth/token/info").to_return(status: 401)
-    expect(service.get_token_info('some_random_token')).to be nil
+    expect(service.get_token_info('some_random_token')).to be_nil
   end
 
   it 'returns nil for idp offline' do
     stub_request(:get, "#{issuer_url}/oauth/token/info").to_raise(Errno::ECONNREFUSED)
-    expect(service.get_token_info('some_random_token')).to be nil
+    expect(service.get_token_info('some_random_token')).to be_nil
   end
 
   it 'returns nil for idp unresponsive' do
     stub_request(:get, "#{issuer_url}/oauth/token/info").to_raise(Errno::ETIMEDOUT)
-    expect(service.get_token_info('some_random_token')).to be nil
+    expect(service.get_token_info('some_random_token')).to be_nil
   end
 
   it 'returns hash for valid token' do
@@ -88,9 +88,9 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
     stub_request(:get, "#{issuer_url}/oauth/token/info")
       .with(headers: { 'Authorization' => "Bearer #{valid_token}" })
       .to_return(status: 200, body: '{"resource_owner_id":null,"scopes":["idp:api"],"expires_in_seconds":200,' \
-        '"application":{"uid":"' + SecureRandom.hex(32) + '"},"created_at":' + 1.hour.ago.utc.to_i.to_s + '}')
+                                    '"application":{"uid":"' + SecureRandom.hex(32) + '"},"created_at":' + 1.hour.ago.utc.to_i.to_s + '}')
     # rubocop:enable Style/StringConcatenation
-    expect(service.get_token_info(valid_token)).not_to be nil
+    expect(service.get_token_info(valid_token)).not_to be_nil
   end
 
   it 'returns headers hash for valid token' do
@@ -108,7 +108,7 @@ RSpec.describe TokenValidator::OauthTokenService, type: :request do
     stub_request(:post, "#{issuer_url}/oauth/token")
       .to_return(status: 200, body: { access_token:, token_type: :bearer, expires_in: 1800, refresh_token: '',
                                       scope: 'test:api' }.to_json)
-    expect(service.basic_http_header).to eq(authorization: "Basic #{::Base64.strict_encode64("#{access_token}:")}")
+    expect(service.basic_http_header).to eq(authorization: "Basic #{Base64.strict_encode64("#{access_token}:")}")
   end
 
   it 'returns empty hash for basic http authorization header for nil auth_token' do

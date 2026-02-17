@@ -5,7 +5,7 @@ class TokenValidator::TokenService
     attr_reader :message
 
     def initialize(message)
-      super(message)
+      super
       @message = message
     end
   end

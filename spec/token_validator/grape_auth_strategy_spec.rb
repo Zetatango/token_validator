@@ -55,8 +55,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
 
     mock_service = {}
     allow(TokenValidator::TokenService).to receive(:new).and_return(mock_service)
-    allow(mock_service).to receive(:valid_access_token?).and_return(true)
-    allow(mock_service).to receive(:decoded_jwt).and_return(token)
+    allow(mock_service).to receive_messages(valid_access_token?: true, decoded_jwt: token)
 
     env = setup_env(token:)
     response = strategy_middleware.call env
@@ -68,8 +67,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
 
     mock_service = {}
     allow(TokenValidator::TokenService).to receive(:new).and_return(mock_service)
-    allow(mock_service).to receive(:valid_access_token?).and_return(true)
-    allow(mock_service).to receive(:decoded_jwt).and_return(token)
+    allow(mock_service).to receive_messages(valid_access_token?: true, decoded_jwt: token)
 
     env = setup_env(token:)
 
@@ -77,13 +75,12 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
     expect(response[0]).to eq(401)
   end
 
-  it 'No bearer authorization header ' do
+  it 'No bearer authorization header' do
     token = create_token
 
     mock_service = {}
     allow(TokenValidator::TokenService).to receive(:new).and_return(mock_service)
-    allow(mock_service).to receive(:valid_access_token?).and_return(true)
-    allow(mock_service).to receive(:decoded_jwt).and_return(token)
+    allow(mock_service).to receive_messages(valid_access_token?: true, decoded_jwt: token)
 
     env = setup_env token:, scheme: "Basic"
 
@@ -96,8 +93,7 @@ RSpec.describe TokenValidator::GrapeAuthStrategy, type: :request do
 
     mock_service = {}
     allow(TokenValidator::TokenService).to receive(:new).and_return(mock_service)
-    allow(mock_service).to receive(:valid_access_token?).and_return(false)
-    allow(mock_service).to receive(:decoded_jwt).and_return(token)
+    allow(mock_service).to receive_messages(valid_access_token?: false, decoded_jwt: token)
 
     env = setup_env(token:)
 

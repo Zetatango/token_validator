@@ -17,7 +17,7 @@ RSpec.describe TokenValidator::ValidatorConfig, type: :request do
 
   it "logger set directly is not nil" do
     described_class.logger = Logger.new($stdout)
-    expect(described_class.logger).not_to be nil
+    expect(described_class.logger).not_to be_nil
     expect(described_class.logger.is_a?(Logger)).to be true
   end
 

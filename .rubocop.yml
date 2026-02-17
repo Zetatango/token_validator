@@ -1,4 +1,4 @@
-require:
+plugins:
   - rubocop-rspec
   - rubocop-performance
 
@@ -9,13 +9,14 @@ AllCops:
     - node_modules/**/*
     - output/**/*
     - vendor/**/*
-  TargetRubyVersion: 3.2.2
-  RSpec:
-    Patterns:
-      - _spec.rb
-      - "(?:^|/)spec/"
-    SpecTypes:
-      Feature: 'spec/features/**/*'
+  TargetRubyVersion: 3.3
+  NewCops: enable
+
+Gemspec/DevelopmentDependencies:
+  Enabled: false
+
+Gemspec/RequireMFA:
+  Enabled: false
 
 Style/Documentation:
   Enabled: false

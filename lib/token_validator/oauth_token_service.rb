@@ -7,18 +7,21 @@ class TokenValidator::OauthTokenService
   include Singleton
   include TokenValidator::TokenCacheHelper
 
-  def access_token
-    fetch_access_token
+  # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
+  def access_token(issuer = nil)
+    fetch_access_token(issuer)
   end
 
-  def basic_http_header
-    return { authorization: "Basic #{::Base64.strict_encode64("#{access_token[:token]}:")}" } unless access_token.nil?
+  def basic_http_header(issuer = nil)
+    token = access_token(issuer)
+    return { authorization: "Basic #{::Base64.strict_encode64("#{token[:token]}:")}" } unless token.nil?
 
     {}
   end
 
-  def oauth_auth_header
-    return { authorization: "Bearer #{access_token[:token]}" } unless access_token.nil?
+  def oauth_auth_header(issuer = nil)
+    token = access_token(issuer)
+    return { authorization: "Bearer #{token[:token]}" } unless token.nil?
 
     {}
   end

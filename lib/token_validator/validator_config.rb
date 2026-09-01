@@ -14,6 +14,18 @@ class TokenValidator::ValidatorConfig
   # Every trusted issuer entry must carry all of these, non-blank.
   REQUIRED_ISSUER_KEYS = %i[issuer_url jwks_url audience algorithm].freeze
 
+  # Machine-to-machine credentials, needed only by an issuer this library obtains tokens *from*
+  # rather than merely verifies tokens against. Optional, and **only stored when supplied**, so an
+  # entry that omits them is byte-identical to one written before these keys existed.
+  #
+  # +token_url+ is optional even for an issuer that does use M2M: omitted, it is derived from
+  # +issuer_url+ at the point of use.
+  #
+  # This is why D21's rule that the invalid-entry exception names the index and key but never the
+  # value stopped being a precaution and became load-bearing -- an entry can now hold a real
+  # +client_secret+.
+  OPTIONAL_ISSUER_KEYS = %i[client_id client_secret token_url].freeze
+
   # The algorithm the primary issuer has always signed with.
   PRIMARY_ISSUER_ALGORITHM = 'RS512'
 
@@ -112,10 +124,7 @@ class TokenValidator::ValidatorConfig
   def self.validated_issuer_entry(entry, index)
     raise InvalidIssuerConfigException, "additional_issuers[#{index}] must be a Hash, got #{entry.class}" unless entry.is_a?(Hash)
 
-    # Read only the supported keys, in either symbol or string form. Anything else is dropped
-    # rather than carried along, which is what `configure` does with keys it does not recognise
-    # -- and this never calls `to_sym` on a key that may not respond to it.
-    supported = REQUIRED_ISSUER_KEYS.to_h { |key| [key, entry.key?(key) ? entry[key] : entry[key.to_s]] }
+    supported = supported_issuer_keys(entry)
 
     REQUIRED_ISSUER_KEYS.each do |key|
       raise InvalidIssuerConfigException, "additional_issuers[#{index}] is missing a value for #{key}" if supported[key].blank?
@@ -132,6 +141,29 @@ class TokenValidator::ValidatorConfig
     supported.freeze
   end
   private_class_method :validated_issuer_entry
+
+  # Read only the supported keys, in either symbol or string form. Anything else is dropped rather
+  # than carried along, which is what `configure` does with keys it does not recognise -- and this
+  # never calls `to_sym` on a key that may not respond to it.
+  #
+  # The optional keys are merged in **only when supplied**. Defaulting them to nil instead would
+  # change the shape of every existing entry, and callers compare these hashes.
+  def self.supported_issuer_keys(entry)
+    supported = REQUIRED_ISSUER_KEYS.to_h { |key| [key, issuer_key_value(entry, key)] }
+
+    OPTIONAL_ISSUER_KEYS.each do |key|
+      value = issuer_key_value(entry, key)
+      supported[key] = value unless value.nil?
+    end
+
+    supported
+  end
+  private_class_method :supported_issuer_keys
+
+  def self.issuer_key_value(entry, key)
+    entry.key?(key) ? entry[key] : entry[key.to_s]
+  end
+  private_class_method :issuer_key_value
 
   def self.logger
     @logger ||= Rails.logger.nil? ? Logger.new($stdout) : Rails.logger

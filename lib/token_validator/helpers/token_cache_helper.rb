@@ -10,11 +10,23 @@ module TokenValidator::TokenCacheHelper
   ISSUER_JWKS_KEY = 'issuer-jwks'
   ACCESS_TOKEN = 'access-token'
 
-  def fetch_access_token
-    @access_token = Rails.cache&.read(ACCESS_TOKEN, namespace:)
-    @access_token = request_access_token if @access_token.nil?
+  # A machine token for +issuer+, or for the primary issuer when none is given.
+  #
+  # Cached per issuer for the same reason the signing keys are: a caller must never be handed a
+  # token minted for a different issuer's audience.
+  def fetch_access_token(issuer = nil)
+    entry = issuer_entry_for(issuer)
+    return nil if entry.nil? || !machine_token_credentials?(entry)
 
-    @access_token
+    cache_key = access_token_cache_key(entry[:issuer_url])
+    token = Rails.cache&.read(cache_key, namespace:)
+    token = request_access_token(entry, cache_key) if token.nil?
+
+    # Scratch state on a Singleton, so only the primary issuer touches it. Letting an additional
+    # issuer write here would be precisely the shared mutable state per-issuer isolation forbids.
+    @access_token = token if issuer.nil?
+
+    token
   end
 
   # The signing keys for +issuer+, or for the primary issuer when none is given.
@@ -24,7 +36,7 @@ module TokenValidator::TokenCacheHelper
   # verify a token claiming a different one -- so a caller must never be able to reach issuer A's
   # keys by asking for issuer B.
   def fetch_signing_key(issuer = nil)
-    entry = signing_key_issuer_entry(issuer)
+    entry = issuer_entry_for(issuer)
 
     # Not an issuer this library trusts. Returning nil rather than falling back to the primary
     # issuer's keys is deliberate: a fallback here is exactly the cross-issuer confusion the
@@ -52,25 +64,23 @@ module TokenValidator::TokenCacheHelper
     nil
   end
 
-  def request_access_token
-    response = RestClient.post(oauth_path(:token), grant_type: :client_credentials,
-                                                   client_id: TokenValidator::ValidatorConfig.config[:client_id],
-                                                   client_secret: TokenValidator::ValidatorConfig.config[:client_secret],
-                                                   scope: TokenValidator::ValidatorConfig.config[:requested_scope])
+  def request_access_token(entry, cache_key)
+    # Parsed once. The previous version parsed the same body three times, and guarded a literal
+    # hash against being nil; both are dropped here without any change in behaviour.
+    response = JSON.parse(RestClient.post(token_endpoint_for(entry), access_token_params(entry)))
+
     access_token = {
-      token: JSON.parse(response)['access_token'],
-      expires: Time.now.to_i + JSON.parse(response)['expires_in'],
-      expires_in: JSON.parse(response)['expires_in']
+      token: response['access_token'],
+      expires: Time.now.to_i + response['expires_in'],
+      expires_in: response['expires_in']
     }
 
-    unless access_token.nil?
-      Rails.cache&.write(
-        ACCESS_TOKEN,
-        access_token,
-        namespace:,
-        expires_in: access_token[:expires_in] - 3.minutes
-      )
-    end
+    Rails.cache&.write(
+      cache_key,
+      access_token,
+      namespace:,
+      expires_in: access_token[:expires_in] - 3.minutes
+    )
 
     access_token
   rescue Errno::ECONNREFUSED, RestClient::Exception
@@ -83,6 +93,48 @@ module TokenValidator::TokenCacheHelper
 
   private
 
+  # The primary issuer keeps the exact endpoint it has always used, double slash and all. Only an
+  # additional issuer resolves through its entry.
+  def token_endpoint_for(entry)
+    return oauth_path(:token) if primary_issuer?(entry)
+
+    # Auth0 publishes its token endpoint at <domain>/oauth/token. +token_url+ overrides that for
+    # anything non-standard.
+    entry[:token_url].presence || "#{entry[:issuer_url].chomp('/')}/oauth/token"
+  end
+
+  def access_token_params(entry)
+    return primary_access_token_params if primary_issuer?(entry)
+
+    # Auth0 requires +audience+ on a client-credentials grant. Without it the token comes back for
+    # the tenant's own management API rather than for ours.
+    { grant_type: :client_credentials,
+      client_id: entry[:client_id],
+      client_secret: entry[:client_secret],
+      audience: entry[:audience] }
+  end
+
+  # Byte-identical to what this library has always sent, including the absence of +audience+.
+  def primary_access_token_params
+    { grant_type: :client_credentials,
+      client_id: TokenValidator::ValidatorConfig.config[:client_id],
+      client_secret: TokenValidator::ValidatorConfig.config[:client_secret],
+      scope: TokenValidator::ValidatorConfig.config[:requested_scope] }
+  end
+
+  # An issuer configured only so that its tokens can be *verified* carries no machine-token
+  # credentials. Asking it for a token must yield nothing rather than quietly falling back to the
+  # primary issuer's credentials, which would post our client secret to somebody else's endpoint.
+  def machine_token_credentials?(entry)
+    return true if primary_issuer?(entry)
+
+    entry[:client_id].present? && entry[:client_secret].present?
+  end
+
+  def primary_issuer?(entry)
+    entry[:issuer_url] == TokenValidator::ValidatorConfig.config[:issuer_url]
+  end
+
   # An omitted issuer means the primary one, which is what every caller wanted before this library
   # knew about more than one.
   #
@@ -91,16 +143,24 @@ module TokenValidator::TokenCacheHelper
   # ValidatorConfig rejects exactly that. Treating blank as absent here would route around that
   # guard and hand back the primary issuer's keys, which is the cross-issuer confusion this
   # per-issuer lookup exists to prevent.
-  def signing_key_issuer_entry(issuer)
+  def issuer_entry_for(issuer)
     issuer = TokenValidator::ValidatorConfig.config[:issuer_url] if issuer.nil?
 
     TokenValidator::ValidatorConfig.issuer_config_for(issuer)
   end
 
+  def jwks_cache_key(issuer_url)
+    issuer_scoped_key(ISSUER_JWKS_KEY, issuer_url)
+  end
+
+  def access_token_cache_key(issuer_url)
+    issuer_scoped_key(ACCESS_TOKEN, issuer_url)
+  end
+
   # Digested because an issuer URL is not safe to paste into a cache key, and because it keeps the
   # key a fixed length whatever the issuer. Any per-issuer key works; a shared one does not.
-  def jwks_cache_key(issuer_url)
-    "#{ISSUER_JWKS_KEY}-#{Digest::SHA256.hexdigest(issuer_url)}"
+  def issuer_scoped_key(prefix, issuer_url)
+    "#{prefix}-#{Digest::SHA256.hexdigest(issuer_url)}"
   end
 
   def namespace

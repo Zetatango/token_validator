@@ -45,4 +45,10 @@ class TokenValidator::OauthTokenService
     clear_cache_if_available
     @access_token = nil
   end
+
+  # Forgets one issuer's signing keys, leaving every other issuer's cache -- and every machine
+  # token -- alone. +issuer+ omitted means the primary issuer.
+  def clear_signing_key(issuer = nil)
+    evict_signing_key(issuer)
+  end
 end

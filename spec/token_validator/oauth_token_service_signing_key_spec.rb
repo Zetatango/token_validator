@@ -175,6 +175,55 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  # The retry in TokenService calls this when a token names a kid we have not seen, which is a
+  # rotation in the normal case and an unauthenticated stranger's token in the bad one. Scoping the
+  # eviction is what keeps the second case from costing every other issuer its cache.
+  describe 'forgetting one issuer\'s keys' do
+    before { with_cache }
+
+    it 'refetches the issuer it was given' do
+      stub_request(:get, auth0_jwks_url).to_return(status: 200, body: jwks_body('auth0-kid'))
+      service.signing_key(auth0_issuer)
+
+      service.clear_signing_key(auth0_issuer)
+      service.signing_key(auth0_issuer)
+
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+    end
+
+    it 'leaves every other issuer cached' do
+      stub_request(:get, primary_jwks_url).to_return(status: 200, body: jwks_body('primary-kid'))
+      stub_request(:get, auth0_jwks_url).to_return(status: 200, body: jwks_body('auth0-kid'))
+      service.signing_key
+      service.signing_key(auth0_issuer)
+
+      service.clear_signing_key(auth0_issuer)
+
+      service.signing_key
+      expect(a_request(:get, primary_jwks_url)).to have_been_made.once
+    end
+
+    it 'still treats an omitted issuer as the primary one' do
+      stub_request(:get, primary_jwks_url).to_return(status: 200, body: jwks_body('primary-kid'))
+      service.signing_key
+
+      service.clear_signing_key
+      service.signing_key
+
+      expect(a_request(:get, primary_jwks_url)).to have_been_made.twice
+    end
+
+    it 'evicts nothing for an issuer it does not trust' do
+      stub_request(:get, primary_jwks_url).to_return(status: 200, body: jwks_body('primary-kid'))
+      service.signing_key
+
+      service.clear_signing_key('https://attacker.example.com/')
+
+      service.signing_key
+      expect(a_request(:get, primary_jwks_url)).to have_been_made.once
+    end
+  end
+
   describe 'without a cache configured' do
     it 'still fetches each issuer from its own address' do
       stub_request(:get, auth0_jwks_url).to_return(status: 200, body: jwks_body('auth0-kid'))

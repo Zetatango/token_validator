@@ -13,6 +13,10 @@ class TokenValidator::TokenService
   class JwtFormatException < TokenServiceException; end
   class InvalidIssuerException < TokenServiceException; end
   class InvalidSignatureException < TokenServiceException; end
+  # Distinct from JwtFormatException so that "someone is presenting the wrong algorithm for this
+  # issuer" can be told apart from "garbage arrived". The jwt gem raises both as DecodeError, which
+  # flattened the two into one message and left alerting unable to distinguish them.
+  class InvalidAlgorithmException < TokenServiceException; end
   class InvalidSignatureKeyException < TokenServiceException; end
   class InvalidAudienceException < TokenServiceException; end
   class ExpiredJwtException < TokenServiceException; end
@@ -104,6 +108,9 @@ class TokenValidator::TokenService
     raise InvalidIssuerException, 'Invalid issuer'
   rescue JWT::InvalidAudError
     raise InvalidAudienceException, 'Invalid audience'
+  rescue JWT::IncorrectAlgorithm
+    # Ahead of the DecodeError rescue below, which it is a subclass of.
+    raise InvalidAlgorithmException, algorithm_mismatch_message(entry)
   rescue JWT::DecodeError
     raise JwtFormatException, 'Invalid token'
   end
@@ -147,6 +154,25 @@ class TokenValidator::TokenService
   # Scoped rather than a full +clear+ on purpose: +kid+ and +iss+ both come from an unauthenticated
   # token, so a wholesale flush here would let any rejected token evict every other issuer's keys
   # and machine tokens and force a round of refetches.
+  # Names the algorithm the issuer is configured for, because that is ours to name and it is what
+  # an operator needs in order to act.
+  #
+  # The algorithm the *token* names is attacker-controlled text on its way into a log, so it is
+  # echoed only when it is one of +PERMITTED_ISSUER_ALGORITHMS+ -- in which case the value printed
+  # is one of our own constants rather than the token's bytes. A token claiming +HS256+, or an
+  # +alg+ carrying newlines to forge a log line, is refused with the shorter message instead.
+  #
+  # Every reachable +IncorrectAlgorithm+ really is about the algorithm: the gem raises it when the
+  # token names one that is not allowed here, and when it names none at all.
+  def algorithm_mismatch_message(entry)
+    claimed = jwt_header['alg']
+    configured = "issuer is configured for #{entry[:algorithm]}"
+
+    return "Invalid algorithm: #{configured}" unless TokenValidator::ValidatorConfig::PERMITTED_ISSUER_ALGORITHMS.include?(claimed)
+
+    "Invalid algorithm: token names #{claimed}, #{configured}"
+  end
+
   def find_jwk(entry)
     jwk = search_jwks(entry)
     if jwk.nil?

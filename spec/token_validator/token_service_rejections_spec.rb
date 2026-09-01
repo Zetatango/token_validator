@@ -75,8 +75,9 @@ RSpec.describe TokenValidator::TokenService do
       it 'refuses one signed with an algorithm that is not this issuer\'s (TKV.10)' do
         bad = token_from(issuer, algorithm: issuer[:other_algorithm])
 
-        expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::JwtFormatException)
-          .and have_attributes(message: 'Invalid token')
+        expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::InvalidAlgorithmException)
+          .and have_attributes(message: "Invalid algorithm: token names #{issuer[:other_algorithm]}, " \
+                                        "issuer is configured for #{issuer[:algorithm]}")
         expect(validates?(bad)).to be false
       end
 
@@ -151,6 +152,51 @@ RSpec.describe TokenValidator::TokenService do
                        roadrunner_key, 'RS512')
 
       expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::InvalidIssuerException)
+    end
+  end
+
+  # The algorithm rejection is deliberately its own exception rather than the generic one, so that
+  # "someone is presenting the wrong algorithm for this issuer" can be told from "garbage arrived".
+  # That only pays off if the message is both specific and safe to write to a log.
+  describe 'what the algorithm rejection is allowed to say' do
+    def token_with_raw_header(header)
+      payload = claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid)
+      encode = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
+
+      "#{encode.call(header)}.#{encode.call(payload)}.#{Base64.urlsafe_encode64('signature', padding: false)}"
+    end
+
+    # HS256 is the dangerous claim -- under it the verification key *is* the signing key, and ours
+    # is public JWKS material (LEN-1069). It is refused, and not repeated back into the log.
+    it 'does not echo an algorithm outside the permitted set' do
+      bad = JWT.encode(claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid),
+                       'secret', 'HS256')
+
+      expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::InvalidAlgorithmException)
+        .and have_attributes(message: 'Invalid algorithm: issuer is configured for RS512')
+    end
+
+    # `alg` is attacker-controlled text heading for a log line. Echoing it unfiltered would let a
+    # token write its own entry; the permitted-set check means only our own constants are printed.
+    it 'does not let a token forge a log line through alg' do
+      bad = token_with_raw_header({ alg: "RS512\nWARN -- : Access token accepted", typ: 'JWT' })
+
+      expect(rejection_for(bad)).to have_attributes(message: 'Invalid algorithm: issuer is configured for RS512')
+    end
+
+    it 'refuses a token that names no algorithm at all' do
+      bad = token_with_raw_header({ typ: 'JWT' })
+
+      expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::InvalidAlgorithmException)
+        .and have_attributes(message: 'Invalid algorithm: issuer is configured for RS512')
+    end
+
+    # The distinction only means something if the generic rejection still exists for actual garbage.
+    it 'still calls a malformed token malformed' do
+      bad = "#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}"
+
+      expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::JwtFormatException)
+        .and have_attributes(message: 'Invalid token')
     end
   end
 

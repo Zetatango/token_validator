@@ -3,105 +3,25 @@
 require 'spec_helper'
 require 'securerandom'
 
-# RSA generation dominates the runtime of this file, and these keys carry no meaning beyond being
-# distinct from one another, so each is generated once and reused across examples.
-module TokenServiceMultiIssuerSpec
-  KEYS = Hash.new { |keys, name| keys[name] = OpenSSL::PKey::RSA.new(2048) }
-
-  # The cache namespace is derived from Rails.application's module name, which does not exist in
-  # this suite. A named stand-in lets the real namespace code run rather than stubbing it out.
-  Application = Class.new
-end
-
 # M1-03 (LEN-1076): a token is verified against whichever trusted issuer signed it, rather than
 # against the one provider this library used to assume.
 #
 # token_service_spec.rb is left unedited beside this file, as the record that single-issuer
-# behaviour is unchanged (REG.07).
+# behaviour is unchanged (REG.07). The issuers, keys and token shapes live in
+# spec/support/multi_issuer_tokens.rb, shared with the rejection specs.
 RSpec.describe TokenValidator::TokenService do
-  # The canonical primary issuer carries a trailing slash in every environment, which is why its
-  # discovery address has always had a double slash in it. The vanity address does not carry one.
-  # That asymmetry is why exact matching is worth proving rather than assuming.
-  def primary_issuer = 'https://idp.example.com/'
-  def primary_jwks_url = 'https://idp.example.com//oauth/discovery/keys'
-  def primary_audience = 'https://api.example.com'
-
-  # A second trusted address for the *same* provider: a partner-branded URL, publishing the same
-  # keys under the same algorithm, differing only in what its tokens put in `iss`.
-  def vanity_issuer = 'https://login.partner.example.com'
-  def vanity_jwks_url = "#{vanity_issuer}/oauth/discovery/keys"
-
-  def auth0_issuer = 'https://tenant.ca.auth0.com/'
-  def auth0_jwks_url = "#{auth0_issuer}.well-known/jwks.json"
-  def auth0_audience = 'https://platform.example.com'
-
-  def roadrunner_key = TokenServiceMultiIssuerSpec::KEYS[:roadrunner]
-  def auth0_key = TokenServiceMultiIssuerSpec::KEYS[:auth0]
-  def roadrunner_kid = 'roadrunner-kid'
-  def auth0_kid = 'auth0-kid'
-
-  def expected_scopes = ['test:api']
-
-  def vanity_entry
-    { issuer_url: vanity_issuer, jwks_url: vanity_jwks_url, audience: primary_audience, algorithm: 'RS512' }
-  end
-
-  def auth0_entry
-    { issuer_url: auth0_issuer, jwks_url: auth0_jwks_url, audience: auth0_audience, algorithm: 'RS256' }
-  end
+  include MultiIssuerTokens
 
   before do
-    TokenValidator::ValidatorConfig.configure(issuer_url: primary_issuer, audience: primary_audience)
-    TokenValidator::ValidatorConfig.additional_issuers = [vanity_entry, auth0_entry]
+    configure_issuers
 
     described_class.clear
   end
 
-  # ValidatorConfig holds class-level state and this is the only file that leaves additional issuers
-  # configured. Clearing them keeps the single-issuer specs measuring what they claim to, whatever
-  # order the suite runs in.
+  # ValidatorConfig holds class-level state and these are the only files that leave additional
+  # issuers configured. Clearing them keeps the single-issuer specs measuring what they claim to,
+  # whatever order the suite runs in.
   after { TokenValidator::ValidatorConfig.additional_issuers = [] }
-
-  def stub_jwks(url, key, kid, algorithm)
-    body = { keys: [key.public_key.to_jwk(kid:, use: 'sig', alg: algorithm)] }.to_json
-    stub_request(:get, url).to_return(status: 200, body:)
-  end
-
-  # Both roadrunner addresses publish the same key, because they are the same provider.
-  def stub_every_issuer
-    stub_jwks(primary_jwks_url, roadrunner_key, roadrunner_kid, 'RS512')
-    stub_jwks(vanity_jwks_url, roadrunner_key, roadrunner_kid, 'RS512')
-    stub_jwks(auth0_jwks_url, auth0_key, auth0_kid, 'RS256')
-  end
-
-  def claims(issuer:, audience:)
-    { sub: SecureRandom.hex(16), iat: Time.now.to_i, exp: (Time.now + 30.minutes).to_i,
-      jti: SecureRandom.uuid, iss: issuer, aud: audience, scopes: ['test:api'] }
-  end
-
-  # Each token shape is built the way its own provider builds it, because the two disagree about
-  # where `kid` belongs: roadrunner writes it into the payload, Auth0 into the JOSE header.
-  def roadrunner_token(issuer: primary_issuer, key: roadrunner_key, kid: roadrunner_kid, algorithm: 'RS512', audience: primary_audience)
-    JWT.encode(claims(issuer:, audience:).merge(kid:), key, algorithm)
-  end
-
-  def auth0_token(issuer: auth0_issuer, key: auth0_key, kid: auth0_kid, algorithm: 'RS256', audience: auth0_audience)
-    JWT.encode(claims(issuer:, audience:), key, algorithm, { kid: })
-  end
-
-  def validates?(token)
-    described_class.new(token, expected_scopes).valid_access_token?
-  end
-
-  def cache
-    @cache ||= ActiveSupport::Cache::MemoryStore.new
-  end
-
-  # Rails.cache is nil throughout this suite, so nothing here is cached by default. Giving it a real
-  # store is the only way to test what an eviction does and does not reach.
-  def with_cache
-    allow(Rails).to receive_messages(cache: cache, application: TokenServiceMultiIssuerSpec::Application.new)
-  end
 
   describe 'a token from each issuer this library trusts' do
     before { stub_every_issuer }

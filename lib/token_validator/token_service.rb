@@ -60,8 +60,15 @@ class TokenValidator::TokenService
     true
   end
 
+  # +iat+ and +exp+ are checked for presence here, beside +sub+, because +expired?+ compares both
+  # against the clock. Absent, they used to reach that comparison as nil and raise ArgumentError --
+  # an exception escaping +valid_access_token?+, whose whole contract is to answer true or false.
+  # A token that does not say when it was issued or when it stops being valid cannot be shown to be
+  # current, so it is refused rather than assumed current.
   def valid_contents?
     raise MissingAccessTokenField, 'Missing subject' unless decoded_jwt.key?('sub')
+    raise MissingAccessTokenField, 'Missing issued at' unless decoded_jwt.key?('iat')
+    raise MissingAccessTokenField, 'Missing expiry' unless decoded_jwt.key?('exp')
 
     true
   end

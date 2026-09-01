@@ -83,10 +83,38 @@ RSpec.describe TokenValidator::ValidatorConfig do
       expect(described_class.issuer_config_for('')).to be_nil
     end
 
-    it 'matches exactly, not by prefix or suffix' do
+    it 'matches an additional issuer exactly, not by prefix or suffix' do
       described_class.configure(additional_issuers: [auth0_entry])
       expect(described_class.issuer_config_for("#{auth0_issuer}extra")).to be_nil
       expect(described_class.issuer_config_for(auth0_issuer.chomp('/'))).to be_nil
+    end
+
+    # The primary issuer is the highest-value one to spoof, so its matching gets the same
+    # scrutiny as the additional issuers rather than being assumed correct.
+    it 'matches the primary issuer exactly, not by prefix or suffix' do
+      expect(described_class.issuer_config_for("#{primary_issuer}evil")).to be_nil
+      expect(described_class.issuer_config_for(primary_issuer.chomp('/'))).to be_nil
+    end
+
+    # With no issuer_url configured, a token carrying no issuer must not match the primary
+    # by both being empty. Without the blank guard this returns a config rather than nil.
+    it 'trusts nothing when the library itself is unconfigured' do
+      described_class.configure(issuer_url: '', audience: '')
+      expect(described_class.issuer_config_for('')).to be_nil
+      expect(described_class.issuer_config_for(nil)).to be_nil
+    end
+
+    it 'returns frozen results, so a caller cannot corrupt shared configuration' do
+      described_class.configure(additional_issuers: [auth0_entry])
+      expect(described_class.issuer_config_for(auth0_issuer)).to be_frozen
+      expect(described_class.issuer_config_for(primary_issuer)).to be_frozen
+      expect(described_class.additional_issuers).to be_frozen
+    end
+
+    it 'still answers with an empty list if the backing store was never initialised' do
+      described_class.remove_instance_variable(:@additional_issuers)
+      expect(described_class.additional_issuers).to eq([])
+      expect(described_class.issuer_config_for(auth0_issuer)).to be_nil
     end
   end
 

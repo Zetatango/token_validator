@@ -47,7 +47,15 @@ class TokenValidator::ValidatorConfig
   end
 
   class << self
-    attr_reader :config, :additional_issuers
+    attr_reader :config
+  end
+
+  # Defaulted here rather than relying solely on the assignment in the class body, so the
+  # list can never be nil however this class is loaded or reloaded. A nil here would make
+  # the lookup raise for any consumer that upgrades the gem without configuring anything --
+  # which is every consumer, on the release before they switch issuer.
+  def self.additional_issuers
+    @additional_issuers ||= [].freeze
   end
 
   # The settings for +issuer+, or nil when this library does not trust it.
@@ -59,7 +67,7 @@ class TokenValidator::ValidatorConfig
     return nil if issuer.blank?
     return primary_issuer_config if issuer == @config[:issuer_url]
 
-    @additional_issuers.find { |entry| entry[:issuer_url] == issuer }
+    additional_issuers.find { |entry| entry[:issuer_url] == issuer }
   end
 
   def self.primary_issuer_config

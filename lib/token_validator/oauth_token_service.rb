@@ -23,8 +23,9 @@ class TokenValidator::OauthTokenService
     {}
   end
 
-  def signing_key
-    fetch_signing_key
+  # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
+  def signing_key(issuer = nil)
+    fetch_signing_key(issuer)
   end
 
   def get_token_info(token)

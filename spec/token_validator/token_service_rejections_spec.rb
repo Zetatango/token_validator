@@ -123,6 +123,53 @@ RSpec.describe TokenValidator::TokenService do
     end
   end
 
+  # `JWT.encode` refuses to mint these, so they are assembled by hand -- which is the only way they
+  # ever arrive anyway: from an issuer emitting claims of the wrong type.
+  #
+  # Every one of them used to escape `valid_access_token?` as an ArgumentError or a NoMethodError,
+  # and `exp: []` escaped from *inside the gem*, before any check of ours ran. That is why the type
+  # check runs before signature verification rather than beside the subject check.
+  describe 'time claims of the wrong type' do
+    def token_claiming(overrides)
+      hand_built_token(
+        payload: claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid).merge(overrides),
+        key: roadrunner_key
+      )
+    end
+
+    {
+      'a null issued at' => { iat: nil },
+      'a null expiry' => { exp: nil },
+      'an issued at that is a string' => { iat: 'yesterday' },
+      'an expiry that is a string' => { exp: 'soon' },
+      'an expiry that is a list' => { exp: [] },
+      'an expiry that is an object' => { exp: { at: 1 } },
+      'a not-before that is a list' => { nbf: [] }
+    }.each do |description, overrides|
+      it "refuses #{description} without raising out of valid_access_token?" do
+        bad = token_claiming(overrides)
+
+        expect { validates?(bad) }.not_to raise_error
+        expect(validates?(bad)).to be false
+        expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::MissingAccessTokenField)
+      end
+    end
+
+    it 'accepts a not-before that is a number in the past' do
+      expect(validates?(token_claiming(nbf: (Time.now - 1.minute).to_i))).to be true
+    end
+
+    # A float is a number: RFC 7519 NumericDate permits one, and the clock comparison handles it.
+    it 'accepts time claims that are floats' do
+      expect(validates?(token_claiming(iat: Time.now.to_f, exp: (Time.now + 30.minutes).to_f))).to be true
+    end
+
+    it 'still calls a token too malformed to read claims from malformed' do
+      expect(rejection_for('not.a.token')).to be_a(TokenValidator::TokenService::JwtFormatException)
+        .and have_attributes(message: 'Invalid token')
+    end
+  end
+
   describe 'an issuer this library does not trust (TKV.08)' do
     # Each of these is one edit away from a trusted address. Matching is exact, so all of them are
     # strangers -- and none of them should reach a JWKS fetch, since that would let an untrusted
@@ -160,10 +207,7 @@ RSpec.describe TokenValidator::TokenService do
   # That only pays off if the message is both specific and safe to write to a log.
   describe 'what the algorithm rejection is allowed to say' do
     def token_with_raw_header(header)
-      payload = claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid)
-      encode = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
-
-      "#{encode.call(header)}.#{encode.call(payload)}.#{Base64.urlsafe_encode64('signature', padding: false)}"
+      hand_built_token(header:, payload: claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid))
     end
 
     # HS256 is the dangerous claim -- under it the verification key *is* the signing key, and ours

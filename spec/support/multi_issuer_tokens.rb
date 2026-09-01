@@ -90,6 +90,18 @@ module MultiIssuerTokens
     JWT.encode(claims(issuer:, audience:), key, algorithm, { kid: })
   end
 
+  # A token assembled by hand rather than through +JWT.encode+, for shapes the encoder refuses to
+  # produce -- a null +exp+, an +alg+ of its own choosing -- which is exactly what a misbehaving or
+  # hostile issuer would hand us. Signed for real when a key is given, so it reaches the checks that
+  # come after signature verification; the digest pairs with the default RS512 header.
+  def hand_built_token(payload:, header: { alg: 'RS512', typ: 'JWT' }, key: nil)
+    encode = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
+    signing_input = "#{encode.call(header)}.#{encode.call(payload)}"
+    signature = key ? key.sign(OpenSSL::Digest.new('SHA512'), signing_input) : 'signature'
+
+    "#{signing_input}.#{Base64.urlsafe_encode64(signature, padding: false)}"
+  end
+
   def validates?(token)
     described_class.new(token, expected_scopes).valid_access_token?
   end

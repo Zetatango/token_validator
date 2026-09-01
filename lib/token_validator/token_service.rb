@@ -24,6 +24,10 @@ class TokenValidator::TokenService
   class ReplayedJwtException < TokenServiceException; end
   class InvalidScope < TokenServiceException; end
 
+  # The claims this library compares against the clock, and the wording each is reported under.
+  # +nbf+ is not required, but is type-checked when present for the same reason as these.
+  REQUIRED_TIME_CLAIMS = { 'iat' => 'issued at', 'exp' => 'expiry' }.freeze
+
   def self.clear
     TokenValidator::OauthTokenService.instance.clear
   end
@@ -47,7 +51,30 @@ class TokenValidator::TokenService
   private
 
   def valid_structure?
-    valid_signature? && valid_contents? && valid_scope?
+    valid_time_claims? && valid_signature? && valid_contents? && valid_scope?
+  end
+
+  # +iat+ and +exp+ must be numbers, and +nbf+ must be one when it is there at all.
+  #
+  # Checked *before* the signature, which is deliberate and is the only placement that works: the
+  # verifier itself reads +exp+ and +nbf+, and on a claim of the wrong type it raises NoMethodError
+  # from inside the gem -- escaping +valid_access_token?+, whose contract is to answer true or
+  # false, exactly as the ArgumentError from comparing nil to the clock used to. A check that ran
+  # after verification could not reach that case at all.
+  #
+  # Reading unverified claims in order to *type-check* them decides nothing and grants nothing. The
+  # token still faces every check below, and one that fails here would have failed there.
+  def valid_time_claims?
+    REQUIRED_TIME_CLAIMS.each do |claim, description|
+      raise MissingAccessTokenField, "Missing or invalid #{description}" unless decoded_jwt[claim].is_a?(Numeric)
+    end
+
+    raise MissingAccessTokenField, 'Invalid not before' if decoded_jwt.key?('nbf') && !decoded_jwt['nbf'].is_a?(Numeric)
+
+    true
+  rescue JWT::DecodeError
+    # Too malformed to read a claim from is simply malformed, and is reported as it always was.
+    raise JwtFormatException, 'Invalid token'
   end
 
   def valid_scope?
@@ -64,21 +91,16 @@ class TokenValidator::TokenService
     true
   end
 
-  # +iat+ and +exp+ are checked for presence here, beside +sub+, because +expired?+ compares both
-  # against the clock. Absent, they used to reach that comparison as nil and raise ArgumentError --
-  # an exception escaping +valid_access_token?+, whose whole contract is to answer true or false.
-  # A token that does not say when it was issued or when it stops being valid cannot be shown to be
-  # current, so it is refused rather than assumed current.
   def valid_contents?
     raise MissingAccessTokenField, 'Missing subject' unless decoded_jwt.key?('sub')
-    raise MissingAccessTokenField, 'Missing issued at' unless decoded_jwt.key?('iat')
-    raise MissingAccessTokenField, 'Missing expiry' unless decoded_jwt.key?('exp')
 
     true
   end
 
   def expired?
-    expired = Time.now.to_i < decoded_jwt['iat'] || Time.now.to_i > decoded_jwt['exp']
+    # Compared as floats because RFC 7519 permits a fractional NumericDate, and an integer clock
+    # against a fractional +iat+ reads a token issued this very second as issued in the future.
+    expired = Time.now.to_f < decoded_jwt['iat'] || Time.now.to_f > decoded_jwt['exp']
 
     raise ExpiredJwtException, 'Access token is expired' if expired
 
@@ -148,12 +170,6 @@ class TokenValidator::TokenService
     }
   end
 
-  # A +kid+ this issuer has not published usually means it rotated its keys, so forget what we
-  # cached for *that issuer* and look once more.
-  #
-  # Scoped rather than a full +clear+ on purpose: +kid+ and +iss+ both come from an unauthenticated
-  # token, so a wholesale flush here would let any rejected token evict every other issuer's keys
-  # and machine tokens and force a round of refetches.
   # Names the algorithm the issuer is configured for, because that is ours to name and it is what
   # an operator needs in order to act.
   #
@@ -173,6 +189,12 @@ class TokenValidator::TokenService
     "Invalid algorithm: token names #{claimed}, #{configured}"
   end
 
+  # A +kid+ this issuer has not published usually means it rotated its keys, so forget what we
+  # cached for *that issuer* and look once more.
+  #
+  # Scoped rather than a full +clear+ on purpose: +kid+ and +iss+ both come from an unauthenticated
+  # token, so a wholesale flush here would let any rejected token evict every other issuer's keys
+  # and machine tokens and force a round of refetches.
   def find_jwk(entry)
     jwk = search_jwks(entry)
     if jwk.nil?

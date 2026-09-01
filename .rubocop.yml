@@ -197,3 +197,10 @@ Style/SingleArgumentDig:
 
 Style/StringConcatenation:
   Enabled: true
+
+# Wants `disable-next` in place of a disable/enable pair around a single statement.
+# Codacy runs its own, older RuboCop that does not recognise that directive and
+# reports Lint/CopDirectiveSyntax ("Malformed directive comment") against it, which
+# fails the pull request. Re-enable once Codacy's analyzer supports it.
+Style/DirectiveScope:
+  Enabled: false

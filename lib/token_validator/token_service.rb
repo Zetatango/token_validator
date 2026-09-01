@@ -28,6 +28,16 @@ class TokenValidator::TokenService
   # +nbf+ is not required, but is type-checked when present for the same reason as these.
   REQUIRED_TIME_CLAIMS = { 'iat' => 'issued at', 'exp' => 'expiry' }.freeze
 
+  # The three shapes a token can express its permissions in, all of them read and combined:
+  #
+  # - +scopes+ -- a list, which is what the primary issuer has always emitted
+  # - +scope+  -- a space-separated string, the OAuth 2.0 spelling (RFC 6749 section 3.3) Auth0 uses
+  # - +permissions+ -- a list, which Auth0 adds when role-based access control is enabled
+  #
+  # A token may carry more than one, and they are unioned rather than one winning: an Auth0 tenant
+  # with RBAC on emits +scope+ and +permissions+ together, and they do not necessarily agree.
+  PERMISSION_CLAIMS = %w[scopes scope permissions].freeze
+
   def self.clear
     TokenValidator::OauthTokenService.instance.clear
   end
@@ -78,17 +88,43 @@ class TokenValidator::TokenService
   end
 
   def valid_scope?
-    raise InvalidScope, 'Missing scopes' unless decoded_jwt.key?('scopes')
+    granted = granted_scopes
+
+    # Carrying none of the three claims is what "missing scopes" has always meant, and it still
+    # fails even when nothing was required -- which is the behaviour every existing spec pins.
+    raise InvalidScope, 'Missing scopes' if granted.nil?
     return true if @expected_scopes.blank?
 
-    valid = false
-    @expected_scopes.each do |scope|
-      valid ||= decoded_jwt['scopes'].include? scope
-    end
-
-    raise InvalidScope, "Missing scope: require at least one of #{@expected_scopes}" unless valid
+    raise InvalidScope, "Missing scope: require at least one of #{@expected_scopes}" unless granted.intersect?(@expected_scopes)
 
     true
+  end
+
+  # Everything the token grants, from whichever of the three claims it carries, or nil when it
+  # carries none of them.
+  #
+  # Presence is decided by the claim being *there*, not by it holding anything: a token with an
+  # empty list has said it has no permissions, which is a different statement from saying nothing.
+  def granted_scopes
+    present = PERMISSION_CLAIMS.select { |claim| decoded_jwt.key?(claim) }
+    return nil if present.empty?
+
+    present.flat_map { |claim| scope_values(decoded_jwt[claim]) }.uniq
+  end
+
+  # A list is already a list of scopes; a string is split on whitespace, which is how OAuth 2.0
+  # spells one.
+  #
+  # Splitting is the point, not a formality. The check this replaced asked the claim +include?+,
+  # and +include?+ on a String matches a *substring* -- so reading the +scope+ string without
+  # splitting it would let a token carrying +superadmin:write+ satisfy a required +admin+. Anything
+  # that is neither shape grants nothing, rather than raising: a claim we do not understand is not
+  # one to act on.
+  def scope_values(value)
+    return value if value.is_a?(Array)
+    return value.split if value.is_a?(String)
+
+    []
   end
 
   def valid_contents?

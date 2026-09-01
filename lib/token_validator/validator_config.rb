@@ -17,6 +17,26 @@ class TokenValidator::ValidatorConfig
   # The algorithm the primary issuer has always signed with.
   PRIMARY_ISSUER_ALGORITHM = 'RS512'
 
+  # The only algorithms an issuer entry may name. Asymmetric signatures exclusively:
+  # every issuer this library will ever trust publishes a public key and signs with the
+  # private half, so a shared-secret (+HS*+) algorithm is never correct here. It is also
+  # the dangerous one -- under +HS*+ the verification key *is* the signing key, so the
+  # JWKS material we fetch in public would become enough to mint tokens.
+  #
+  # This list is what makes the jwt gem's empty-key HMAC bypass unreachable once M1-03
+  # stops hard-coding PRIMARY_ISSUER_ALGORITHM and starts honouring this value.
+  #
+  # Spelling is exact, and deliberately so: the jwt gem matches +alg+ case-insensitively
+  # (+JWA.find+ downcases, +valid_alg?+ uses +casecmp+), which means 'hs256' is every bit
+  # as dangerous as 'HS256'. Comparing the value as given rejects both. Do not add an
+  # +upcase+ ahead of this check -- accepting 'rs256' would store a value that no longer
+  # equals the RFC 7518 name anything downstream compares against.
+  PERMITTED_ISSUER_ALGORITHMS = %w[
+    RS256 RS384 RS512
+    ES256 ES384 ES512
+    PS256 PS384 PS512
+  ].freeze
+
   @config = {
     issuer_url: '',
     client_id: '',
@@ -99,6 +119,14 @@ class TokenValidator::ValidatorConfig
 
     REQUIRED_ISSUER_KEYS.each do |key|
       raise InvalidIssuerConfigException, "additional_issuers[#{index}] is missing a value for #{key}" if supported[key].blank?
+    end
+
+    # Named in the message because an algorithm is not a secret and the operator cannot
+    # fix a typo they cannot see. Nothing else from the entry joins it -- see D21.
+    unless PERMITTED_ISSUER_ALGORITHMS.include?(supported[:algorithm])
+      raise InvalidIssuerConfigException,
+            "additional_issuers[#{index}] names algorithm #{supported[:algorithm].inspect}, " \
+            "which is not one of #{PERMITTED_ISSUER_ALGORITHMS.join(', ')}"
     end
 
     supported.freeze

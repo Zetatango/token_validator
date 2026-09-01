@@ -121,9 +121,19 @@ RSpec.describe TokenValidator::ValidatorConfig do
         end
     end
 
-    it 'ignores unrecognised extra keys' do
-      expect { described_class.configure(additional_issuers: [auth0_entry.merge(colour: 'blue')]) }
+    it 'drops unrecognised extra keys rather than carrying them along' do
+      described_class.configure(additional_issuers: [auth0_entry.merge(colour: 'blue')])
+      expect(described_class.issuer_config_for(auth0_issuer)).to eq(auth0_entry)
+    end
+
+    it 'ignores a key that cannot be symbolised, rather than raising NoMethodError' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(1 => 'x')]) }
         .not_to raise_error
+    end
+
+    it 'still raises its own exception when such an entry is also malformed' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(1 => 'x', jwks_url: '')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException, /missing a value for jwks_url/)
     end
 
     it 'leaves the previous configuration in place when it raises' do

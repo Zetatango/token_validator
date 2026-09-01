@@ -84,13 +84,16 @@ class TokenValidator::ValidatorConfig
   def self.validated_issuer_entry(entry, index)
     raise InvalidIssuerConfigException, "additional_issuers[#{index}] must be a Hash, got #{entry.class}" unless entry.is_a?(Hash)
 
-    entry = entry.transform_keys(&:to_sym)
+    # Read only the supported keys, in either symbol or string form. Anything else is dropped
+    # rather than carried along, which is what `configure` does with keys it does not recognise
+    # -- and this never calls `to_sym` on a key that may not respond to it.
+    supported = REQUIRED_ISSUER_KEYS.to_h { |key| [key, entry.key?(key) ? entry[key] : entry[key.to_s]] }
 
     REQUIRED_ISSUER_KEYS.each do |key|
-      raise InvalidIssuerConfigException, "additional_issuers[#{index}] is missing a value for #{key}" if entry[key].blank?
+      raise InvalidIssuerConfigException, "additional_issuers[#{index}] is missing a value for #{key}" if supported[key].blank?
     end
 
-    entry.freeze
+    supported.freeze
   end
   private_class_method :validated_issuer_entry
 

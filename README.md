@@ -17,6 +17,44 @@ TokenValidator::ValidatorConfig.configure(
 )
 ```
 
+### Trusting more than one issuer
+
+The validator can trust several issuers at once. Each entry describes one issuer completely, and a
+token is verified against the entry whose `issuer_url` matches its `iss` claim -- that entry's
+signing keys, algorithm and audience, not the primary issuer's:
+
+```ruby
+TokenValidator::ValidatorConfig.configure(
+  # ... the settings above, which describe the primary issuer ...
+  additional_issuers: [
+    {
+      issuer_url: ENV['auth0_issuer_url'],       # required
+      jwks_url: ENV['auth0_jwks_url'],           # required
+      audience: ENV['auth0_audience'],           # required
+      algorithm: 'RS256',                        # required
+      client_id: ENV['auth0_client_id'],         # optional: only to obtain machine tokens
+      client_secret: ENV['auth0_client_secret'], # optional: only to obtain machine tokens
+      token_url: ENV['auth0_token_url']          # optional: defaults to <issuer_url>/oauth/token
+    }
+  ]
+)
+```
+
+- **Matching is exact, and a trailing slash is part of the address.** One provider reachable at two
+  addresses needs an entry for each -- which is the usual case for a partner-branded vanity URL,
+  since the canonical issuer URL ends in a slash and the vanity one generally does not. The two
+  entries can name the same `jwks_url`.
+- `algorithm` must be asymmetric (`RS*`, `ES*` or `PS*`); a shared-secret algorithm is refused when
+  it is configured, not when a token arrives.
+- An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
+  asked for one, rather than falling back to the primary issuer's credentials.
+- A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
+  it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
+  configuration it cannot trust. The exception names the offending position and key but never the
+  value, because these entries hold a client secret.
+- Omitting `additional_issuers` leaves behaviour exactly as it was: one issuer, verified the way it
+  always has been.
+
 ## Installation
 Add this line to your application's Gemfile:
 

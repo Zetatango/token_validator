@@ -134,10 +134,16 @@ class TokenValidator::TokenService
     }
   end
 
+  # A +kid+ this issuer has not published usually means it rotated its keys, so forget what we
+  # cached for *that issuer* and look once more.
+  #
+  # Scoped rather than a full +clear+ on purpose: +kid+ and +iss+ both come from an unauthenticated
+  # token, so a wholesale flush here would let any rejected token evict every other issuer's keys
+  # and machine tokens and force a round of refetches.
   def find_jwk(entry)
     jwk = search_jwks(entry)
     if jwk.nil?
-      TokenValidator::OauthTokenService.instance.clear
+      TokenValidator::OauthTokenService.instance.clear_signing_key(entry[:issuer_url])
       jwk = search_jwks(entry)
     end
     jwk

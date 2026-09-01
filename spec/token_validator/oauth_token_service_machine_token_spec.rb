@@ -211,4 +211,21 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(service.oauth_auth_header('https://attacker.example.com/')).to eq({})
     end
   end
+
+  # Machine tokens and signing keys share a cache namespace, so the scoped JWKS eviction has to
+  # leave them alone -- otherwise a stranger's token with an unknown kid would still cost us a
+  # round of client-credentials requests.
+  describe 'when one issuer\'s signing keys are evicted' do
+    before { with_cache }
+
+    it 'keeps the cached machine token' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body('auth0-token'))
+      service.access_token(auth0_issuer)
+
+      service.clear_signing_key(auth0_issuer)
+      service.access_token(auth0_issuer)
+
+      expect(a_request(:post, auth0_token_url)).to have_been_made.once
+    end
+  end
 end

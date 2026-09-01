@@ -7,6 +7,10 @@ require 'securerandom'
 # distinct from one another, so each is generated once and reused across examples.
 module TokenServiceMultiIssuerSpec
   KEYS = Hash.new { |keys, name| keys[name] = OpenSSL::PKey::RSA.new(2048) }
+
+  # The cache namespace is derived from Rails.application's module name, which does not exist in
+  # this suite. A named stand-in lets the real namespace code run rather than stubbing it out.
+  Application = Class.new
 end
 
 # M1-03 (LEN-1076): a token is verified against whichever trusted issuer signed it, rather than
@@ -87,6 +91,16 @@ RSpec.describe TokenValidator::TokenService do
 
   def validates?(token)
     described_class.new(token, expected_scopes).valid_access_token?
+  end
+
+  def cache
+    @cache ||= ActiveSupport::Cache::MemoryStore.new
+  end
+
+  # Rails.cache is nil throughout this suite, so nothing here is cached by default. Giving it a real
+  # store is the only way to test what an eviction does and does not reach.
+  def with_cache
+    allow(Rails).to receive_messages(cache: cache, application: TokenServiceMultiIssuerSpec::Application.new)
   end
 
   describe 'a token from each issuer this library trusts' do
@@ -253,6 +267,48 @@ RSpec.describe TokenValidator::TokenService do
 
     it 'rejects a token naming a kid the issuer does not publish' do
       expect(validates?(roadrunner_token(kid: 'no-such-kid'))).to be false
+    end
+
+    # Neither provider emits a token whose two copies disagree, and that is exactly why the
+    # precedence needs pinning: nothing else in this file can tell the two orderings apart. The
+    # JOSE header is authoritative, per RFC 7515 -- swap the fallback around and both of these turn
+    # red.
+    it 'prefers the header kid when the two disagree' do
+      header_right = JWT.encode(claims(issuer: primary_issuer, audience: primary_audience).merge(kid: 'no-such-kid'),
+                                roadrunner_key, 'RS512', { kid: roadrunner_kid })
+
+      expect(validates?(header_right)).to be true
+    end
+
+    it 'does not fall back to the payload kid when the header names an unknown one' do
+      header_wrong = JWT.encode(claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid),
+                                roadrunner_key, 'RS512', { kid: 'no-such-kid' })
+
+      expect(validates?(header_wrong)).to be false
+    end
+  end
+
+  # An unknown kid triggers a retry, on the assumption that the issuer rotated its keys. Both kid
+  # and iss come from a token nobody has authenticated yet, so what that retry is allowed to throw
+  # away matters: a wholesale clear would let any rejected token flush every issuer's cache.
+  describe 'the retry when a kid is not found' do
+    before do
+      with_cache
+      stub_every_issuer
+    end
+
+    it 'refetches the keys of the issuer the token named' do
+      validates?(auth0_token(kid: 'no-such-kid'))
+
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+    end
+
+    it 'leaves another issuer\'s cached keys alone' do
+      validates?(roadrunner_token)
+      validates?(auth0_token(kid: 'no-such-kid'))
+      validates?(roadrunner_token)
+
+      expect(a_request(:get, primary_jwks_url)).to have_been_made.once
     end
   end
 

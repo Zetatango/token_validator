@@ -44,8 +44,10 @@ TokenValidator::ValidatorConfig.configure(
   addresses needs an entry for each -- which is the usual case for a partner-branded vanity URL,
   since the canonical issuer URL ends in a slash and the vanity one generally does not. The two
   entries can name the same `jwks_url`.
-- `algorithm` must be asymmetric (`RS*`, `ES*` or `PS*`); a shared-secret algorithm is refused when
-  it is configured, not when a token arrives.
+- `algorithm` must be one of exactly nine values -- `RS256`, `RS384`, `RS512`, `ES256`, `ES384`,
+  `ES512`, `PS256`, `PS384`, `PS512` -- spelled as RFC 7518 spells them. Anything else, including a
+  shared-secret (`HS*`) algorithm or a differently-cased spelling of a permitted one, is refused
+  when it is configured rather than when a token arrives.
 - An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
   asked for one, rather than falling back to the primary issuer's credentials.
 - A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue

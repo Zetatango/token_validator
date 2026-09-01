@@ -52,6 +52,20 @@ module TokenValidator::TokenCacheHelper
     Rails.cache&.clear(namespace:)
   end
 
+  # Drops just +issuer+'s cached signing keys.
+  #
+  # Deliberately not +clear+. A token naming a +kid+ we have not seen usually means its issuer
+  # rotated keys, and re-reading that one issuer's JWKS is the whole remedy. Clearing the namespace
+  # instead would let an unknown +kid+ -- a value the token controls, on a request that has not been
+  # authenticated yet -- evict every *other* issuer's keys and machine tokens, turning a bad token
+  # into a cache flush and a round of refetches.
+  def evict_signing_key(issuer = nil)
+    entry = issuer_entry_for(issuer)
+    return if entry.nil?
+
+    Rails.cache&.delete(jwks_cache_key(entry[:issuer_url]), namespace:)
+  end
+
   # Fetches from the address the issuer entry carries, rather than building one. The primary
   # entry's +jwks_url+ is synthesised to be exactly what +oauth_path('discovery/keys')+ used to
   # produce -- double slash included -- so the primary issuer keeps resolving where it always has.

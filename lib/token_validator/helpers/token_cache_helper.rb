@@ -83,10 +83,16 @@ module TokenValidator::TokenCacheHelper
 
   private
 
-  # No issuer named means the primary one, which is what every caller wanted before this library
+  # An omitted issuer means the primary one, which is what every caller wanted before this library
   # knew about more than one.
+  #
+  # +nil+ and not +blank?+, deliberately. An empty or whitespace issuer is a *named* issuer that
+  # happens to be blank -- typically a token whose +iss+ claim is empty or missing -- and
+  # ValidatorConfig rejects exactly that. Treating blank as absent here would route around that
+  # guard and hand back the primary issuer's keys, which is the cross-issuer confusion this
+  # per-issuer lookup exists to prevent.
   def signing_key_issuer_entry(issuer)
-    issuer = TokenValidator::ValidatorConfig.config[:issuer_url] if issuer.blank?
+    issuer = TokenValidator::ValidatorConfig.config[:issuer_url] if issuer.nil?
 
     TokenValidator::ValidatorConfig.issuer_config_for(issuer)
   end

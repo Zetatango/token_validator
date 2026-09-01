@@ -97,6 +97,26 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(service.signing_key('https://attacker.example.com/')).to be_nil
     end
 
+    # An empty issuer is a *named* issuer that happens to be blank, not "no issuer given".
+    # ValidatorConfig rejects it deliberately, and this layer must not route around that guard by
+    # treating blank as absent -- that would hand the primary issuer's keys to a token whose `iss`
+    # claim is empty or missing.
+    ['', '   '].each do |blank_issuer|
+      it "refuses a blank issuer #{blank_issuer.inspect} rather than falling back to the primary" do
+        stub_request(:get, primary_jwks_url).to_return(status: 200, body: jwks_body('primary-kid'))
+
+        expect(service.signing_key(blank_issuer)).to be_nil
+        expect(a_request(:get, primary_jwks_url)).not_to have_been_made
+      end
+    end
+
+    # Only an omitted argument means "the primary issuer".
+    it 'still treats an omitted issuer as the primary one' do
+      stub_request(:get, primary_jwks_url).to_return(status: 200, body: jwks_body('primary-kid'))
+
+      expect(kid_of(service.signing_key)).to eq('primary-kid')
+    end
+
     # The configured primary issuer ends in a slash in every environment, so oauth_path has always
     # produced a double slash here. ValidatorConfig reproduces that deliberately; this pins that it
     # survives the move to jwks_url, because normalising it would silently move the address.

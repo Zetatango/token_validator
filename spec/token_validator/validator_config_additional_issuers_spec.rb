@@ -173,4 +173,86 @@ RSpec.describe TokenValidator::ValidatorConfig do
       expect(described_class.additional_issuers).to eq([auth0_entry])
     end
   end
+
+  describe 'rejecting a dangerous signing algorithm' do
+    # Asserted rather than assumed: the synthesised primary entry has to satisfy the same
+    # rule as a configured one, or M1-03 would honour a value this list would have refused.
+    it 'permits the algorithm the primary issuer already uses' do
+      expect(described_class::PERMITTED_ISSUER_ALGORITHMS)
+        .to include(described_class::PRIMARY_ISSUER_ALGORITHM)
+    end
+
+    it 'leaves the primary issuer resolving as it always has' do
+      expect(described_class.issuer_config_for(primary_issuer)[:algorithm]).to eq('RS512')
+    end
+
+    # Spelled out literally rather than derived from the constant. The per-algorithm
+    # examples below iterate the constant, so on their own they would shrink silently with
+    # it -- delete PS512 from the allowlist and its example disappears instead of failing.
+    # This is the assertion that notices.
+    it 'permits exactly the asymmetric algorithms, and nothing else' do
+      expect(described_class::PERMITTED_ISSUER_ALGORITHMS).to contain_exactly(
+        'RS256', 'RS384', 'RS512',
+        'ES256', 'ES384', 'ES512',
+        'PS256', 'PS384', 'PS512'
+      )
+    end
+
+    TokenValidator::ValidatorConfig::PERMITTED_ISSUER_ALGORITHMS.each do |algorithm|
+      # Checks the value survives into the stored entry, not merely that nothing raised:
+      # a spec that only asserts the absence of an exception passes against a gutted method.
+      it "accepts #{algorithm} and keeps it" do
+        described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: algorithm)])
+        expect(described_class.issuer_config_for(auth0_issuer)[:algorithm]).to eq(algorithm)
+      end
+    end
+
+    %w[HS256 HS384 HS512 none].each do |algorithm|
+      it "refuses #{algorithm} and names it" do
+        expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: algorithm)]) }
+          .to raise_error(described_class::InvalidIssuerConfigException, /names algorithm "#{algorithm}"/)
+      end
+    end
+
+    # The jwt gem resolves alg case-insensitively, so a lowercased HMAC name is not a
+    # harmless typo -- it is the same bypass wearing different case.
+    it 'refuses a lowercased HMAC name too' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: 'hs256')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException, /names algorithm "hs256"/)
+    end
+
+    # Pinned deliberately (LEN-1069 asked for a ruling): exact RFC 7518 spelling is
+    # required. jwt would resolve 'rs256', but accepting it would store a value that no
+    # longer equals the canonical name, so it fails at boot as the typo it is.
+    it 'refuses a lowercased asymmetric name, rather than quietly correcting it' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: 'rs256')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException, /names algorithm "rs256"/)
+    end
+
+    it 'refuses a symbol, which is not the string the verifier will compare' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: :RS256)]) }
+        .to raise_error(described_class::InvalidIssuerConfigException, /names algorithm :RS256/)
+    end
+
+    it 'names the position and the algorithm, but no other value from the entry' do
+      expect { described_class.configure(additional_issuers: [auth0_entry, auth0_entry.merge(algorithm: 'HS256')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException) do |error|
+          expect(error.message).to include('additional_issuers[1]', 'HS256')
+          expect(error.message).not_to include(auth0_entry[:audience], auth0_entry[:jwks_url])
+        end
+    end
+
+    # Order matters: a blank algorithm is a missing value, not an unsupported one, and the
+    # operator gets the message that actually describes what they left out.
+    it 'reports a blank algorithm as missing rather than as unsupported' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: '')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException, /missing a value for algorithm/)
+    end
+
+    it 'rejects the whole configuration, not just the offending entry' do
+      expect { described_class.configure(additional_issuers: [auth0_entry.merge(algorithm: 'HS256')]) }
+        .to raise_error(described_class::InvalidIssuerConfigException)
+      expect(described_class.additional_issuers).to eq([])
+    end
+  end
 end

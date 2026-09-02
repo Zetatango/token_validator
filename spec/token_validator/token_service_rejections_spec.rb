@@ -21,47 +21,6 @@ RSpec.describe TokenValidator::TokenService do
 
   after { TokenValidator::ValidatorConfig.additional_issuers = [] }
 
-  def issuer_url_for(name)
-    { 'the primary issuer' => primary_issuer, 'the vanity issuer' => vanity_issuer, 'Auth0' => auth0_issuer }.fetch(name)
-  end
-
-  def audience_for(name)
-    name == 'Auth0' ? auth0_audience : primary_audience
-  end
-
-  def key_for(role)
-    role == :auth0 ? auth0_key : roadrunner_key
-  end
-
-  def kid_for(role)
-    role == :auth0 ? auth0_kid : roadrunner_kid
-  end
-
-  # A token for +issuer+, built the way that issuer's provider builds one, with any claim
-  # overridden or deleted.
-  def token_from(issuer, algorithm: nil, claim_overrides: {}, delete: [])
-    payload = claims(issuer: issuer_url_for(issuer[:name]), audience: audience_for(issuer[:name]))
-    payload[:kid] = kid_for(issuer[:key]) unless issuer[:key] == :auth0
-    payload.merge!(claim_overrides)
-    delete.each { |claim| payload.delete(claim) }
-    headers = issuer[:key] == :auth0 ? { kid: auth0_kid } : {}
-
-    JWT.encode(payload, key_for(issuer[:key]), algorithm || issuer[:algorithm], headers)
-  end
-
-  # Runs the same two checks `valid_access_token?` runs, but lets the exception out instead of
-  # swallowing it, so an example can assert *which* rejection fired rather than only that one did.
-  # The class is what a consumer rescues; the message is what alerting reads. This issue's contract
-  # is that neither changes shape when the issuer does.
-  def rejection_for(token)
-    service = described_class.new(token, expected_scopes)
-    service.send(:valid_structure?)
-    service.send(:expired?)
-    nil
-  rescue TokenValidator::TokenService::TokenServiceException => e
-    e
-  end
-
   MultiIssuerTokens::ISSUERS.each do |issuer|
     describe "tokens from #{issuer[:name]}" do
       it 'refuses one minted for a different audience (TKV.09)' do

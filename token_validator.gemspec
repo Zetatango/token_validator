@@ -16,14 +16,13 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = '>= 3.3.0'
 
-  # Prevent pushing this gem to RubyGems.org. To allow pushes either set the 'allowed_push_host'
-  # to allow pushing to a single host or delete this section to allow pushing to any host.
-  if spec.respond_to?(:metadata)
-    spec.metadata['allowed_push_host'] = "TODO: Set to 'http://mygemserver.com'"
-  else
-    raise 'RubyGems 2.0 or newer is required to protect against ' \
-          'public gem pushes.'
-  end
+  # This gem is never pushed to a gem host. Releases are annotated git tags on this repository,
+  # and each consumer pins one in its Gemfile (decision D23, 2026-09-02):
+  #
+  #   gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
+  #
+  # The value below is deliberately not a URL so that `gem push` fails on purpose.
+  spec.metadata['allowed_push_host'] = 'none: released by git tag, never pushed (D23)'
 
   spec.files = Dir['{app,config,lib}/**/*', 'Rakefile', 'README.md']
 

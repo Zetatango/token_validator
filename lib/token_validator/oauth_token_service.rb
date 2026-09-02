@@ -7,24 +7,28 @@ class TokenValidator::OauthTokenService
   include Singleton
   include TokenValidator::TokenCacheHelper
 
-  def access_token
-    fetch_access_token
+  # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
+  def access_token(issuer = nil)
+    fetch_access_token(issuer)
   end
 
-  def basic_http_header
-    return { authorization: "Basic #{::Base64.strict_encode64("#{access_token[:token]}:")}" } unless access_token.nil?
+  def basic_http_header(issuer = nil)
+    token = access_token(issuer)
+    return { authorization: "Basic #{::Base64.strict_encode64("#{token[:token]}:")}" } unless token.nil?
 
     {}
   end
 
-  def oauth_auth_header
-    return { authorization: "Bearer #{access_token[:token]}" } unless access_token.nil?
+  def oauth_auth_header(issuer = nil)
+    token = access_token(issuer)
+    return { authorization: "Bearer #{token[:token]}" } unless token.nil?
 
     {}
   end
 
-  def signing_key
-    fetch_signing_key
+  # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
+  def signing_key(issuer = nil)
+    fetch_signing_key(issuer)
   end
 
   def get_token_info(token)
@@ -40,5 +44,11 @@ class TokenValidator::OauthTokenService
   def clear
     clear_cache_if_available
     @access_token = nil
+  end
+
+  # Forgets one issuer's signing keys, leaving every other issuer's cache -- and every machine
+  # token -- alone. +issuer+ omitted means the primary issuer.
+  def clear_signing_key(issuer = nil)
+    evict_signing_key(issuer)
   end
 end

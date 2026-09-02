@@ -17,11 +17,57 @@ TokenValidator::ValidatorConfig.configure(
 )
 ```
 
-## Installation
-Add this line to your application's Gemfile:
+### Trusting more than one issuer
+
+The validator can trust several issuers at once. Each entry describes one issuer completely, and a
+token is verified against the entry whose `issuer_url` matches its `iss` claim -- that entry's
+signing keys, algorithm and audience, not the primary issuer's:
 
 ```ruby
-gem 'token_validator'
+TokenValidator::ValidatorConfig.configure(
+  # ... the settings above, which describe the primary issuer ...
+  additional_issuers: [
+    {
+      issuer_url: ENV['auth0_issuer_url'],       # required
+      jwks_url: ENV['auth0_jwks_url'],           # required
+      audience: ENV['auth0_audience'],           # required
+      algorithm: 'RS256',                        # required
+      client_id: ENV['auth0_client_id'],         # optional: only to obtain machine tokens
+      client_secret: ENV['auth0_client_secret'], # optional: only to obtain machine tokens
+      token_url: ENV['auth0_token_url']          # optional: defaults to <issuer_url>/oauth/token
+    }
+  ]
+)
+```
+
+- **Matching is exact, and a trailing slash is part of the address.** One provider reachable at two
+  addresses needs an entry for each -- which is the usual case for a partner-branded vanity URL,
+  since the canonical issuer URL ends in a slash and the vanity one generally does not. The two
+  entries can name the same `jwks_url`.
+- `algorithm` must be one of exactly nine values -- `RS256`, `RS384`, `RS512`, `ES256`, `ES384`,
+  `ES512`, `PS256`, `PS384`, `PS512` -- spelled as RFC 7518 spells them. Anything else, including a
+  shared-secret (`HS*`) algorithm or a differently-cased spelling of a permitted one, is refused
+  when it is configured rather than when a token arrives.
+- An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
+  asked for one, rather than falling back to the primary issuer's credentials.
+- A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
+  it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
+  configuration it cannot trust. The exception names the offending position and key but **not the
+  value**, because these entries hold a client secret and consumers forward this exception to an
+  error tracker.
+  **One deliberate exception:** an unsupported `algorithm` *is* named in the message. An algorithm
+  is not a secret, it is drawn from a fixed set, and an operator cannot fix a typo they cannot see.
+  No other value from the entry ever joins it.
+- Omitting `additional_issuers` leaves behaviour exactly as it was: one issuer, verified the way it
+  always has been.
+
+## Installation
+
+This gem is not published to any gem host, so `gem install` cannot find it. Add the pinned GitHub
+tag form to your application's Gemfile (see **Releases** below):
+
+```ruby
+gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
 
 And then execute:
@@ -29,10 +75,28 @@ And then execute:
 $ bundle
 ```
 
-Or install it yourself as:
-```bash
-$ gem install token_validator
+## Releases
+
+This gem is **never pushed to a gem host** — releases are annotated git tags on this repository, and
+each consumer pins one (decision D23):
+
+```ruby
+gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
+
+To cut a release:
+
+1. Bump `TokenValidator::VERSION` and add a `CHANGELOG.md` entry.
+2. Merge to `master` (human-gated). Note the merge commit's SHA — every step below names it
+   explicitly, so a stale checkout cannot tag the wrong thing.
+3. Run `bin/parity_check` twice — once with `--lib` pointing at a checkout of the previous release
+   tag, once at the merge commit — and diff the transcripts. **This gate runs before anything is
+   published**: a surprise here costs a fixup commit, not a shipped bad release.
+4. Record the transcript diff in the release pull request, then tag **the merge commit by SHA** and
+   push: `git tag -a v0.X.Y <merge-sha> -m "v0.X.Y" && git push origin v0.X.Y`.
+
+A pushed tag is published — consumers can pin it the moment it exists, so nothing is tagged until
+the parity gate has passed. Rolling a consumer back is a pin revert in its Gemfile.
 
 ## Development
 Development on this project should occur on separate feature branches and pull requests should be submitted. When submitting a pull request, the pull request comment template should be filled out as much as possible to ensure a quick review and increase the likelihood of the pull request being accepted.

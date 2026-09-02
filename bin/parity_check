@@ -1,0 +1,201 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs a fixed matrix of scenarios against one checkout of this gem and prints what it observed,
+# as JSON: the answer, the exception class and message, and every HTTP request the gem made.
+#
+# Two runs over two checkouts, diffed, are the backward-compatibility proof REG.07 asks for. It is
+# behavioural rather than diff-based on purpose: reading a 483-line diff and concluding "nothing
+# changed for existing callers" is an argument, whereas two identical transcripts are evidence.
+#
+#   bundle exec ruby bin/parity_check --lib <path/to/lib> --fixtures <fixtures.json> --out <transcript.json>
+#
+# The transcript goes to --out rather than stdout because the gem logs every rejection through a
+# logger of its own, and a transcript sharing a stream with a logger is not a transcript.
+#
+# The fixtures file holds the signing key and the pre-built tokens. It is written on first use and
+# read afterwards, so both runs are fed byte-identical input -- without that, the two transcripts
+# differ over freshly generated keys and prove nothing.
+#
+# That file contains a freshly generated **private key**. Write it to a scratch directory, never
+# into this repository.
+
+require 'json'
+require 'optparse'
+require 'stringio'
+
+options = { lib: File.expand_path('../lib', __dir__), fixtures: nil, out: nil }
+OptionParser.new do |opts|
+  opts.on('--lib PATH') { |v| options[:lib] = File.expand_path(v) }
+  opts.on('--fixtures PATH') { |v| options[:fixtures] = File.expand_path(v) }
+  opts.on('--out PATH') { |v| options[:out] = File.expand_path(v) }
+end.parse!
+
+require 'rails'
+require 'jwt'
+require 'json/jwt'
+require 'webmock'
+include WebMock::API # rubocop:disable Style/MixinUsage
+WebMock.enable!
+WebMock.disable_net_connect!
+
+# A --lib that does not exist would silently fall through to whatever library Bundler already has
+# on the load path -- producing a transcript of the wrong code that diffs clean against itself.
+abort "--lib does not exist: #{options[:lib]}" unless File.directory?(options[:lib])
+
+$LOAD_PATH.unshift(options[:lib])
+require 'token_validator'
+
+ISSUER = 'https://idp.example.com/'
+JWKS_URL = 'https://idp.example.com//oauth/discovery/keys'
+TOKEN_URL = 'https://idp.example.com//oauth/token'
+AUDIENCE = 'https://api.example.com'
+KID = 'primary-kid'
+FAR_FUTURE = 4_102_444_800 # 2100-01-01, so "valid" means valid in both runs whenever they run
+LONG_PAST = 946_684_800    # 2000-01-01
+
+def build_fixtures
+  key = OpenSSL::PKey::RSA.new(2048)
+  claims = lambda do |overrides|
+    { sub: 'subject-1', iat: LONG_PAST, exp: FAR_FUTURE, jti: 'jti-1', kid: KID,
+      iss: ISSUER, aud: AUDIENCE, scopes: ['test:api'] }.merge(overrides)
+  end
+  sign = ->(payload, k = key, alg = 'RS512', headers = {}) { JWT.encode(payload, k, alg, headers) }
+
+  encode_segment = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
+  sign_pair = lambda do |header, payload|
+    input = "#{encode_segment.call(header)}.#{encode_segment.call(payload)}"
+    "#{input}.#{Base64.urlsafe_encode64(key.sign(OpenSSL::Digest.new('SHA512'), input), padding: false)}"
+  end
+
+  hand_built = ->(payload) { sign_pair.call({ alg: 'RS512', typ: 'JWT' }, payload) }
+  hand_built_header = ->(header) { sign_pair.call(header, claims.call({})) }
+
+  {
+    'key' => key.to_pem,
+    'jwks' => { keys: [key.public_key.to_jwk(kid: KID, use: 'sig', alg: 'RS512')] }.to_json,
+    'tokens' => {
+      'valid' => sign.call(claims.call({})),
+      'expired' => sign.call(claims.call(exp: LONG_PAST + 60)),
+      'future_iat' => sign.call(claims.call(iat: FAR_FUTURE)),
+      'wrong_audience' => sign.call(claims.call(aud: 'https://elsewhere.example.com')),
+      'unknown_issuer' => sign.call(claims.call(iss: 'https://attacker.example.com/')),
+      'issuer_without_slash' => sign.call(claims.call(iss: 'https://idp.example.com')),
+      'no_subject' => sign.call(claims.call({}).tap { |c| c.delete(:sub) }),
+      'no_scopes_claim' => sign.call(claims.call({}).tap { |c| c.delete(:scopes) }),
+      'other_scopes' => sign.call(claims.call(scopes: ['other:api'])),
+      'empty_scopes' => sign.call(claims.call(scopes: [])),
+      'unknown_kid' => sign.call(claims.call(kid: 'no-such-kid')),
+      'foreign_signature' => sign.call(claims.call({}), OpenSSL::PKey::RSA.new(2048)),
+      'rs256_algorithm' => sign.call(claims.call({}), key, 'RS256'),
+      'malformed' => 'not.a.token',
+      'scope_string_claim' => sign.call(claims.call({}).tap { |c| c.delete(:scopes) }.merge(scope: 'test:api')),
+      'permissions_claim' => sign.call(claims.call({}).tap { |c| c.delete(:scopes) }.merge(permissions: ['test:api'])),
+      'kid_in_header' => sign.call(claims.call({}).tap { |c| c.delete(:kid) }, key, 'RS512', { kid: KID }),
+      'no_expiry' => hand_built.call(claims.call({}).tap { |c| c.delete(:exp) }),
+      'null_issued_at' => hand_built.call(claims.call(iat: nil)),
+      # Segments that are valid base64url of valid JSON that is not an object. Built by hand for
+      # the same reason as the rows above: JWT.encode will not produce them, and only a misbehaving
+      # or hostile issuer ever would.
+      'payload_is_null' => hand_built.call(nil),
+      'payload_is_a_list' => hand_built.call([]),
+      'payload_is_a_number' => hand_built.call(42),
+      'header_is_null' => hand_built_header.call(nil),
+      'header_is_a_list' => hand_built_header.call([])
+    }
+  }
+end
+
+fixtures =
+  if options[:fixtures] && File.exist?(options[:fixtures])
+    JSON.parse(File.read(options[:fixtures]))
+  else
+    build_fixtures.tap { |f| File.write(options[:fixtures], JSON.pretty_generate(f)) if options[:fixtures] }
+  end
+
+requests = []
+log = StringIO.new
+
+# The gem reports every rejection through a logger of its own, and that line is what a consumer's
+# alerting reads -- so it is part of the observable behaviour REG.07 is about. Without capturing it
+# the transcript sees only true/false and cannot tell one rejection from another.
+def capture_log(log)
+  TokenValidator::ValidatorConfig.logger =
+    Logger.new(log, formatter: proc { |_severity, _time, _prog, message| "#{message}\n" })
+end
+
+def drain(log)
+  captured = log.string.strip
+  log.truncate(0)
+  log.rewind
+  captured
+end
+
+def configure!
+  TokenValidator::ValidatorConfig.configure(
+    issuer_url: ISSUER, audience: AUDIENCE,
+    client_id: 'primary-client', client_secret: 'primary-secret', requested_scope: 'test:scope'
+  )
+  # Every scenario runs with no additional issuers: this is the flag-off shape REG.07 is about.
+  TokenValidator::ValidatorConfig.additional_issuers = [] if TokenValidator::ValidatorConfig.respond_to?(:additional_issuers=)
+end
+
+def observe(label, results, log)
+  answer = yield
+  results << { 'scenario' => label, 'answer' => answer, 'error' => nil, 'logged' => drain(log) }
+rescue StandardError => e
+  results << { 'scenario' => label, 'answer' => 'RAISED', 'error' => "#{e.class}: #{e.message}", 'logged' => drain(log) }
+end
+
+results = []
+fixtures['tokens'].each_key do |name|
+  WebMock.reset!
+  requests.clear
+  stub_request(:get, JWKS_URL).to_return do |request|
+    requests << "GET #{request.uri}"
+    { status: 200, body: fixtures['jwks'] }
+  end
+  configure!
+  capture_log(log)
+  TokenValidator::TokenService.clear
+
+  observe("validate #{name}", results, log) do
+    TokenValidator::TokenService.new(fixtures['tokens'][name], ['test:api']).valid_access_token?
+  end
+  results.last['requests'] = requests.dup
+end
+
+# The client side of the gem, which REG.07 covers just as much as verification.
+WebMock.reset!
+requests.clear
+stub_request(:post, TOKEN_URL).to_return do |request|
+  requests << "POST #{request.uri} #{request.body}"
+  { status: 200, body: { access_token: 'machine-token', expires_in: 3600 }.to_json }
+end
+configure!
+TokenValidator::TokenService.clear
+capture_log(log)
+observe('machine token request', results, log) do
+  TokenValidator::OauthTokenService.instance.access_token&.slice(:token, :expires_in)
+end
+results.last['requests'] = requests.dup
+
+observe('oauth auth header', results, log) { TokenValidator::OauthTokenService.instance.oauth_auth_header }
+observe('basic http header', results, log) { TokenValidator::OauthTokenService.instance.basic_http_header }
+
+WebMock.reset!
+requests.clear
+stub_request(:get, JWKS_URL).to_return do |request|
+  requests << "GET #{request.uri}"
+  { status: 200, body: fixtures['jwks'] }
+end
+configure!
+TokenValidator::TokenService.clear
+capture_log(log)
+observe('signing key kid', results, log) do
+  TokenValidator::OauthTokenService.instance.signing_key&.first&.[]('kid')
+end
+results.last['requests'] = requests.dup
+
+transcript = JSON.pretty_generate(results)
+options[:out] ? File.write(options[:out], transcript) : puts(transcript)

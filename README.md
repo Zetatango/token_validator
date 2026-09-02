@@ -52,8 +52,12 @@ TokenValidator::ValidatorConfig.configure(
   asked for one, rather than falling back to the primary issuer's credentials.
 - A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
   it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
-  configuration it cannot trust. The exception names the offending position and key but never the
-  value, because these entries hold a client secret.
+  configuration it cannot trust. The exception names the offending position and key but **not the
+  value**, because these entries hold a client secret and consumers forward this exception to an
+  error tracker.
+  **One deliberate exception:** an unsupported `algorithm` *is* named in the message. An algorithm
+  is not a secret, it is drawn from a fixed set, and an operator cannot fix a typo they cannot see.
+  No other value from the entry ever joins it.
 - Omitting `additional_issuers` leaves behaviour exactly as it was: one issuer, verified the way it
   always has been.
 

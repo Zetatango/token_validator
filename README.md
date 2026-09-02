@@ -74,6 +74,25 @@ Or install it yourself as:
 $ gem install token_validator
 ```
 
+## Releases
+
+This gem is **never pushed to a gem host** — releases are annotated git tags on this repository, and
+each consumer pins one (decision D23):
+
+```ruby
+gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
+```
+
+To cut a release:
+
+1. Bump `TokenValidator::VERSION` and add a `CHANGELOG.md` entry.
+2. Merge to `master` (human-gated).
+3. Tag the merge commit and push the tag: `git tag -a v0.X.Y -m "v0.X.Y" && git push origin v0.X.Y`.
+4. Run `bin/parity_check` against the previous release tag and record the transcript diff in the
+   release pull request — the release gate is behavioural, not a diff read.
+
+Rolling a consumer back is a pin revert in its Gemfile.
+
 ## Development
 Development on this project should occur on separate feature branches and pull requests should be submitted. When submitting a pull request, the pull request comment template should be filled out as much as possible to ensure a quick review and increase the likelihood of the pull request being accepted.
 

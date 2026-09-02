@@ -58,10 +58,12 @@ TokenValidator::ValidatorConfig.configure(
   always has been.
 
 ## Installation
-Add this line to your application's Gemfile:
+
+This gem is not published to any gem host, so `gem install` cannot find it. Add the pinned GitHub
+tag form to your application's Gemfile (see **Releases** below):
 
 ```ruby
-gem 'token_validator'
+gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
 
 And then execute:
@@ -69,10 +71,28 @@ And then execute:
 $ bundle
 ```
 
-Or install it yourself as:
-```bash
-$ gem install token_validator
+## Releases
+
+This gem is **never pushed to a gem host** — releases are annotated git tags on this repository, and
+each consumer pins one (decision D23):
+
+```ruby
+gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
+
+To cut a release:
+
+1. Bump `TokenValidator::VERSION` and add a `CHANGELOG.md` entry.
+2. Merge to `master` (human-gated). Note the merge commit's SHA — every step below names it
+   explicitly, so a stale checkout cannot tag the wrong thing.
+3. Run `bin/parity_check` twice — once with `--lib` pointing at a checkout of the previous release
+   tag, once at the merge commit — and diff the transcripts. **This gate runs before anything is
+   published**: a surprise here costs a fixup commit, not a shipped bad release.
+4. Record the transcript diff in the release pull request, then tag **the merge commit by SHA** and
+   push: `git tag -a v0.X.Y <merge-sha> -m "v0.X.Y" && git push origin v0.X.Y`.
+
+A pushed tag is published — consumers can pin it the moment it exists, so nothing is tagged until
+the parity gate has passed. Rolling a consumer back is a pin revert in its Gemfile.
 
 ## Development
 Development on this project should occur on separate feature branches and pull requests should be submitted. When submitting a pull request, the pull request comment template should be filled out as much as possible to ensure a quick review and increase the likelihood of the pull request being accepted.

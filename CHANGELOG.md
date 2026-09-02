@@ -12,10 +12,11 @@ gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 The multi-issuer release: the validator can trust several token issuers at once, selected per token
 by its `iss` claim. With `additional_issuers` unconfigured, the release is **backward compatible
 rather than byte-identical** — proven behaviourally against v0.6.3 by `bin/parity_check`
-(token_validator#518) across a 23-scenario matrix: 14 scenarios are byte-identical and nine differ
-deliberately (listed under Added/Changed/Fixed below), all in one direction. Nothing v0.6.3 accepted
-is rejected, nothing raises that did not raise before, no scenario makes more HTTP requests, and the
-machine-token client half is byte-identical.
+(token_validator#518, extended in #522) across a **28-scenario matrix: 14 scenarios are
+byte-identical and 14 differ deliberately** (every one listed under Added/Changed/Fixed below), all
+in one direction. Nothing v0.6.3 accepted is rejected, nothing raises that did not raise before, no
+scenario makes more HTTP requests, and the machine-token client half is byte-identical. Five of the
+differences are v0.6.3 crashes that are now clean rejections — see the last two Fixed entries.
 
 ### Added
 
@@ -54,6 +55,20 @@ machine-token client half is byte-identical.
   `valid_access_token?`. `nbf` is type-checked when present. (#516, LEN-1077)
 - Fractional `NumericDate` values (permitted by RFC 7519) no longer read a just-issued token as
   issued in the future: the clock comparison is float against float. (#516)
+- A token segment that is valid base64url of valid JSON but **not an object** (`null`, a list, a
+  number, a string, `true`) is rejected as `JwtFormatException` instead of letting `NoMethodError`
+  or `TypeError` escape `valid_access_token?`, whose contract is to answer true or false. The header
+  case crashed inside the `jwt` gem itself, so the guard wraps the decode call. (#520, LEN-1078)
+- Issuer entry values are stored as **frozen copies**, so a validated `algorithm` or `issuer_url`
+  cannot be mutated after the fact through `additional_issuers` — which would have bypassed the
+  algorithm allowlist or made an unconfigured address resolve. Entries built from `ENV` arrive
+  mutable, so freezing the entry Hash alone was not enough. Freezing a copy leaves the caller's own
+  strings untouched. (#522)
+
+### Tooling
+
+- `bin/parity_check` aborts when `--lib` does not exist, instead of silently measuring whatever
+  library is already loaded and diffing clean against itself. (#521)
 
 ## v0.6.3 — baseline (retrospective)
 

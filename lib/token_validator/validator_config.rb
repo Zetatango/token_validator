@@ -9,6 +9,11 @@ class TokenValidator::ValidatorConfig
   # The message names the offending position and key only. It must never name the
   # value: these entries sit beside +client_secret+ in this class, and every consumer
   # forwards this exception to an error tracker.
+  #
+  # **One deliberate exception**, and the only one: an unsupported +algorithm+ is named. An
+  # algorithm is not a secret, it is drawn from a fixed published set, and an operator cannot fix a
+  # typo they cannot see. Anything added here later needs the same argument made explicitly, or it
+  # takes the rule above.
   class InvalidIssuerConfigException < RuntimeError; end
 
   # Every trusted issuer entry must carry all of these, non-blank.

@@ -129,6 +129,36 @@ RSpec.describe TokenValidator::TokenService do
     end
   end
 
+  # A segment can be a valid base64url encoding of valid JSON that is not an object. Neither
+  # segment then carries anything readable, and both used to escape `valid_access_token?` as
+  # NoMethodError (or TypeError) rather than answering false. Found by the red-team pass on the
+  # v0.7.0 release candidate; present in 0.6.3 too.
+  describe 'token segments that are valid JSON but not objects' do
+    def object_payload
+      claims(issuer: primary_issuer, audience: primary_audience).merge(kid: roadrunner_kid)
+    end
+
+    [nil, [], 42, 'a string', true].each do |payload|
+      it "refuses a payload of #{payload.inspect} without raising out of valid_access_token?" do
+        bad = hand_built_token(payload:, key: roadrunner_key)
+
+        expect { validates?(bad) }.not_to raise_error
+        expect(validates?(bad)).to be false
+        expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::JwtFormatException)
+          .and have_attributes(message: 'Invalid token')
+      end
+    end
+
+    [nil, [], 'a string'].each do |header|
+      it "refuses a header of #{header.inspect} without raising out of valid_access_token?" do
+        bad = hand_built_token(header:, payload: object_payload, key: roadrunner_key)
+
+        expect { validates?(bad) }.not_to raise_error
+        expect(validates?(bad)).to be false
+      end
+    end
+  end
+
   describe 'an issuer this library does not trust (TKV.08)' do
     # Each of these is one edit away from a trusted address. Matching is exact, so all of them are
     # strangers -- and none of them should reach a JWKS fetch, since that would let an untrusted

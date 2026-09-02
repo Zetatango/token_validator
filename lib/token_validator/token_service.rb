@@ -47,8 +47,17 @@ class TokenValidator::TokenService
     @expected_scopes = expected_scopes
   end
 
+  # The payload segment can be a valid base64url encoding of valid JSON that is not an object --
+  # null, a list, a number, a string. `first` then yields something `with_indifferent_access`
+  # cannot be called on (or nil), and the NoMethodError escaped valid_access_token?, whose
+  # contract is to answer true or false. A token whose payload is not a JSON object carries no
+  # claims to read, so it is simply malformed.
   def decoded_jwt
-    @decoded_jwt = JWT.decode(@access_token, nil, false)&.first&.with_indifferent_access
+    payload = decode_segment(:first)
+
+    raise JwtFormatException, 'Invalid token' unless payload.is_a?(Hash)
+
+    @decoded_jwt = payload.with_indifferent_access
   end
 
   def valid_access_token?
@@ -274,7 +283,24 @@ class TokenValidator::TokenService
     jwt_header['kid'].presence || decoded_jwt['kid']
   end
 
+  # Guarded the same way as decoded_jwt, for the same reason one segment over: a header that is
+  # valid JSON but not an object names no kid and no algorithm, and is malformed rather than a
+  # crash.
   def jwt_header
-    JWT.decode(@access_token, nil, false).last.with_indifferent_access
+    header = decode_segment(:last)
+
+    raise JwtFormatException, 'Invalid token' unless header.is_a?(Hash)
+
+    header.with_indifferent_access
+  end
+
+  # jwt 3.2.0 itself crashes while parsing a token whose *header* segment is valid JSON but not an
+  # object -- NoMethodError on nil, TypeError on a list, from inside EncodedToken -- so the
+  # conversion to "malformed" has to wrap the decode call, not only inspect its result. Rescued
+  # narrowly around this one call: anywhere else, those exceptions are still bugs.
+  def decode_segment(which)
+    JWT.decode(@access_token, nil, false)&.public_send(which)
+  rescue NoMethodError, TypeError
+    raise JwtFormatException, 'Invalid token'
   end
 end

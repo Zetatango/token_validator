@@ -13,12 +13,20 @@ class TokenValidator::TokenService
   class JwtFormatException < TokenServiceException; end
   class InvalidIssuerException < TokenServiceException; end
   class InvalidSignatureException < TokenServiceException; end
+  # Distinct from JwtFormatException so that "someone is presenting the wrong algorithm for this
+  # issuer" can be told apart from "garbage arrived". The jwt gem raises both as DecodeError, which
+  # flattened the two into one message and left alerting unable to distinguish them.
+  class InvalidAlgorithmException < TokenServiceException; end
   class InvalidSignatureKeyException < TokenServiceException; end
   class InvalidAudienceException < TokenServiceException; end
   class ExpiredJwtException < TokenServiceException; end
   class MissingAccessTokenField < TokenServiceException; end
   class ReplayedJwtException < TokenServiceException; end
   class InvalidScope < TokenServiceException; end
+
+  # The claims this library compares against the clock, and the wording each is reported under.
+  # +nbf+ is not required, but is type-checked when present for the same reason as these.
+  REQUIRED_TIME_CLAIMS = { 'iat' => 'issued at', 'exp' => 'expiry' }.freeze
 
   def self.clear
     TokenValidator::OauthTokenService.instance.clear
@@ -43,7 +51,30 @@ class TokenValidator::TokenService
   private
 
   def valid_structure?
-    valid_signature? && valid_contents? && valid_scope?
+    valid_time_claims? && valid_signature? && valid_contents? && valid_scope?
+  end
+
+  # +iat+ and +exp+ must be numbers, and +nbf+ must be one when it is there at all.
+  #
+  # Checked *before* the signature, which is deliberate and is the only placement that works: the
+  # verifier itself reads +exp+ and +nbf+, and on a claim of the wrong type it raises NoMethodError
+  # from inside the gem -- escaping +valid_access_token?+, whose contract is to answer true or
+  # false, exactly as the ArgumentError from comparing nil to the clock used to. A check that ran
+  # after verification could not reach that case at all.
+  #
+  # Reading unverified claims in order to *type-check* them decides nothing and grants nothing. The
+  # token still faces every check below, and one that fails here would have failed there.
+  def valid_time_claims?
+    REQUIRED_TIME_CLAIMS.each do |claim, description|
+      raise MissingAccessTokenField, "Missing or invalid #{description}" unless decoded_jwt[claim].is_a?(Numeric)
+    end
+
+    raise MissingAccessTokenField, 'Invalid not before' if decoded_jwt.key?('nbf') && !decoded_jwt['nbf'].is_a?(Numeric)
+
+    true
+  rescue JWT::DecodeError
+    # Too malformed to read a claim from is simply malformed, and is reported as it always was.
+    raise JwtFormatException, 'Invalid token'
   end
 
   def valid_scope?
@@ -67,7 +98,9 @@ class TokenValidator::TokenService
   end
 
   def expired?
-    expired = Time.now.to_i < decoded_jwt['iat'] || Time.now.to_i > decoded_jwt['exp']
+    # Compared as floats because RFC 7519 permits a fractional NumericDate, and an integer clock
+    # against a fractional +iat+ reads a token issued this very second as issued in the future.
+    expired = Time.now.to_f < decoded_jwt['iat'] || Time.now.to_f > decoded_jwt['exp']
 
     raise ExpiredJwtException, 'Access token is expired' if expired
 
@@ -97,6 +130,9 @@ class TokenValidator::TokenService
     raise InvalidIssuerException, 'Invalid issuer'
   rescue JWT::InvalidAudError
     raise InvalidAudienceException, 'Invalid audience'
+  rescue JWT::IncorrectAlgorithm
+    # Ahead of the DecodeError rescue below, which it is a subclass of.
+    raise InvalidAlgorithmException, algorithm_mismatch_message(entry)
   rescue JWT::DecodeError
     raise JwtFormatException, 'Invalid token'
   end
@@ -132,6 +168,25 @@ class TokenValidator::TokenService
       iss: entry[:issuer_url],
       verify_iss: true # Verify issuer (iss claim)
     }
+  end
+
+  # Names the algorithm the issuer is configured for, because that is ours to name and it is what
+  # an operator needs in order to act.
+  #
+  # The algorithm the *token* names is attacker-controlled text on its way into a log, so it is
+  # echoed only when it is one of +PERMITTED_ISSUER_ALGORITHMS+ -- in which case the value printed
+  # is one of our own constants rather than the token's bytes. A token claiming +HS256+, or an
+  # +alg+ carrying newlines to forge a log line, is refused with the shorter message instead.
+  #
+  # Every reachable +IncorrectAlgorithm+ really is about the algorithm: the gem raises it when the
+  # token names one that is not allowed here, and when it names none at all.
+  def algorithm_mismatch_message(entry)
+    claimed = jwt_header['alg']
+    configured = "issuer is configured for #{entry[:algorithm]}"
+
+    return "Invalid algorithm: #{configured}" unless TokenValidator::ValidatorConfig::PERMITTED_ISSUER_ALGORITHMS.include?(claimed)
+
+    "Invalid algorithm: token names #{claimed}, #{configured}"
   end
 
   # A +kid+ this issuer has not published usually means it rotated its keys, so forget what we

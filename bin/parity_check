@@ -39,6 +39,10 @@ include WebMock::API # rubocop:disable Style/MixinUsage
 WebMock.enable!
 WebMock.disable_net_connect!
 
+# A --lib that does not exist would silently fall through to whatever library Bundler already has
+# on the load path -- producing a transcript of the wrong code that diffs clean against itself.
+abort "--lib does not exist: #{options[:lib]}" unless File.directory?(options[:lib])
+
 $LOAD_PATH.unshift(options[:lib])
 require 'token_validator'
 

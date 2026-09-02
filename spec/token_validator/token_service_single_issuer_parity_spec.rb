@@ -120,11 +120,14 @@ RSpec.describe TokenValidator::TokenService do
     end
   end
 
-  # The nine scenarios where this gem no longer behaves as 0.6.3 behaved, each one deliberate: the
-  # three no-fetch rejections (pinned by one representative example below plus the TKV.08 suite), the
-  # three new acceptances, the two crashes turned into rejections, and the wrong-algorithm message
-  # change. They are pinned so the *set* of intended
-  # differences stays exactly this size: a tenth would be a behaviour change nobody decided on.
+  # Fourteen scenarios differ from 0.6.3, every one deliberate. Nine are pinned here: the three
+  # no-fetch rejections (one representative example below, plus the TKV.08 suite), the three new
+  # acceptances, the two crashes turned into rejections, and the wrong-algorithm message change. The
+  # other five are the non-object-segment crashes, pinned in token_service_rejections_spec.rb where
+  # that class of input lives; `bin/parity_check` measures all fourteen together.
+  #
+  # The set is pinned so its *size* stays fixed: a fifteenth would be a behaviour change nobody
+  # decided on.
   describe 'where it deliberately differs from 0.6.3' do
     it 'rejects an untrusted issuer without fetching a JWKS, where 0.6.3 fetched first' do
       validates?(roadrunner_token(issuer: 'https://attacker.example.com/'))

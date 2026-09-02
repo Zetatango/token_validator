@@ -160,8 +160,23 @@ class TokenValidator::ValidatorConfig
   end
   private_class_method :supported_issuer_keys
 
+  # Stored as a frozen *copy* when the value is a String.
+  #
+  # Freezing the entry Hash alone is a false promise: its Strings stay mutable, so a caller could
+  # reach through +additional_issuers+ and +replace+ a value after validation ran. That defeats the
+  # checks this class exists to perform -- an +algorithm+ mutated to +HS256+ is handed straight to
+  # the verifier, past the allowlist, and a mutated +issuer_url+ makes +issuer_config_for+ resolve
+  # an address nobody configured.
+  #
+  # Not hypothetical for the values consumers actually pass: +ENV['x']+ returns a **new, unfrozen**
+  # String on every read, and that is how every consumer builds these entries. A frozen string
+  # literal only looks safe because of the caller's magic comment.
+  #
+  # A copy rather than freezing in place, so this never freezes an object the caller still owns.
   def self.issuer_key_value(entry, key)
-    entry.key?(key) ? entry[key] : entry[key.to_s]
+    value = entry.key?(key) ? entry[key] : entry[key.to_s]
+
+    value.is_a?(String) ? value.dup.freeze : value
   end
   private_class_method :issuer_key_value
 

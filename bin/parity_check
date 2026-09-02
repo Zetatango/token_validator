@@ -62,11 +62,14 @@ def build_fixtures
   end
   sign = ->(payload, k = key, alg = 'RS512', headers = {}) { JWT.encode(payload, k, alg, headers) }
 
-  hand_built = lambda do |payload|
-    encode = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
-    input = "#{encode.call({ alg: 'RS512', typ: 'JWT' })}.#{encode.call(payload)}"
+  encode_segment = ->(part) { Base64.urlsafe_encode64(part.to_json, padding: false) }
+  sign_pair = lambda do |header, payload|
+    input = "#{encode_segment.call(header)}.#{encode_segment.call(payload)}"
     "#{input}.#{Base64.urlsafe_encode64(key.sign(OpenSSL::Digest.new('SHA512'), input), padding: false)}"
   end
+
+  hand_built = ->(payload) { sign_pair.call({ alg: 'RS512', typ: 'JWT' }, payload) }
+  hand_built_header = ->(header) { sign_pair.call(header, claims.call({})) }
 
   {
     'key' => key.to_pem,
@@ -90,7 +93,15 @@ def build_fixtures
       'permissions_claim' => sign.call(claims.call({}).tap { |c| c.delete(:scopes) }.merge(permissions: ['test:api'])),
       'kid_in_header' => sign.call(claims.call({}).tap { |c| c.delete(:kid) }, key, 'RS512', { kid: KID }),
       'no_expiry' => hand_built.call(claims.call({}).tap { |c| c.delete(:exp) }),
-      'null_issued_at' => hand_built.call(claims.call(iat: nil))
+      'null_issued_at' => hand_built.call(claims.call(iat: nil)),
+      # Segments that are valid base64url of valid JSON that is not an object. Built by hand for
+      # the same reason as the rows above: JWT.encode will not produce them, and only a misbehaving
+      # or hostile issuer ever would.
+      'payload_is_null' => hand_built.call(nil),
+      'payload_is_a_list' => hand_built.call([]),
+      'payload_is_a_number' => hand_built.call(42),
+      'header_is_null' => hand_built_header.call(nil),
+      'header_is_a_list' => hand_built_header.call([])
     }
   }
 end

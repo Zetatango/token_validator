@@ -255,4 +255,42 @@ RSpec.describe TokenValidator::ValidatorConfig do
       expect(described_class.additional_issuers).to eq([])
     end
   end
+
+  # The entry Hash was already frozen; its Strings were not. Values arrive mutable in practice --
+  # `ENV['x']` returns a new unfrozen String on every read -- so a caller could `replace` a value
+  # after validation and defeat the checks that ran at configuration time.
+  describe 'values are stored beyond the reach of later mutation' do
+    let(:mutable_entry) do
+      { issuer_url: +'https://tenant.ca.auth0.com/', jwks_url: +'https://tenant.ca.auth0.com/.well-known/jwks.json',
+        audience: +'https://platform.example.com', algorithm: +'RS256',
+        client_id: +'auth0-client', client_secret: +'auth0-secret', token_url: +'https://tenant.ca.auth0.com/oauth/token' }
+    end
+
+    before { described_class.additional_issuers = [mutable_entry] }
+
+    def stored = described_class.additional_issuers.first
+
+    %i[issuer_url jwks_url audience algorithm client_id client_secret token_url].each do |key|
+      it "freezes the stored #{key}" do
+        expect(stored[key]).to be_frozen
+      end
+    end
+
+    # The two that matter most: the algorithm is what the allowlist guards, and the issuer URL is
+    # what selection matches on.
+    it 'refuses a post-storage algorithm change that would bypass the allowlist' do
+      expect { stored[:algorithm].replace('HS256') }.to raise_error(FrozenError)
+      expect(stored[:algorithm]).to eq('RS256')
+    end
+
+    it 'refuses a post-storage issuer change that would make an unconfigured address resolve' do
+      expect { stored[:issuer_url].replace('https://attacker.example.com/') }.to raise_error(FrozenError)
+      expect(described_class.issuer_config_for('https://attacker.example.com/')).to be_nil
+    end
+
+    # A copy is stored, so freezing is never a side effect on an object the caller still holds.
+    it 'leaves the caller\'s own strings alone' do
+      expect(mutable_entry[:algorithm]).not_to be_frozen
+    end
+  end
 end

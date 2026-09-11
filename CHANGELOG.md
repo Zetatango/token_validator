@@ -7,6 +7,37 @@ Consumers pin a tag in their Gemfile (decision D23):
 gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
 
+## v0.7.1 — 2026-09-11
+
+Exposes the permission union that v0.7.0 introduced. **Purely additive**: one method moves from
+private to public, no behaviour changes, and no caller of v0.7.0 is affected by upgrading.
+
+### Added
+
+- `TokenValidator::TokenService#granted_scopes` is now **public**. It answers everything a token
+  grants, unioned across whichever of `scopes`, `scope` and `permissions` the token carries, or
+  `nil` when it carries none of them. (LEN-1159)
+
+  The union already decided whether a request was *allowed*; consumers separately need to know
+  *what* it was allowed, in order to build their own per-request context. zetatango read the raw
+  `scopes` claim to do that — the only shape the primary issuer emits — so under an Auth0 token its
+  context was empty and every scope-dependent branch went dark **silently**: no error, no log line,
+  a 200 response, and a scope check that never matched. Exposing the union is what stops each
+  consumer reimplementing it, differently.
+
+  Contract, now pinned by spec because consumers depend on it:
+
+  - a space-separated `scope` string is **split**, never returned whole — `include?` on a String
+    matches a substring, so a caller asking `granted_scopes.include?('ztt:api')` of `"ztt:apikey"`
+    would otherwise be told yes
+  - `nil` means the token carried no permission claim; `[]` means it carried one and it was empty.
+    The two are different answers and callers branch on the difference
+  - it reads claims, so an unreadable token **raises** rather than answering `nil` — `JWT::DecodeError`
+    for a token that does not decode, `JwtFormatException` for a payload that decodes to something
+    other than an object. "Could not be read" must never be mistaken for "carried nothing"
+
+  Call it once `valid_access_token?` has answered true.
+
 ## v0.7.0 — 2026-09-02
 
 The multi-issuer release: the validator can trust several token issuers at once, selected per token

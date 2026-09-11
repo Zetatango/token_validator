@@ -67,6 +67,29 @@ class TokenValidator::TokenService
     false
   end
 
+  # Everything the token grants, from whichever of the three claims it carries, or nil when it
+  # carries none of them.
+  #
+  # Presence is decided by the claim being *there*, not by it holding anything: a token with an
+  # empty list has said it has no permissions, which is a different statement from saying nothing.
+  #
+  # PUBLIC, because a consumer needs the same union this library validates against. zetatango
+  # builds its per-request scope context from a token's permissions and read the raw +scopes+
+  # claim to do it -- the only shape the primary issuer emits -- which left that context empty
+  # for every Auth0 token, silently: no error, no log line, just a scope check that never matched
+  # (LEN-1159). A consumer forced to re-derive this union will re-derive it differently, so it is
+  # exposed here rather than reimplemented there.
+  #
+  # Call it once +valid_access_token?+ has answered true. It reads claims, so on a malformed token
+  # it raises JwtFormatException just as +decoded_jwt+ does rather than answering nil -- nil here
+  # means "carried no permission claim", and the two must not be confused.
+  def granted_scopes
+    present = PERMISSION_CLAIMS.select { |claim| decoded_jwt.key?(claim) }
+    return nil if present.empty?
+
+    present.flat_map { |claim| scope_values(decoded_jwt[claim]) }.uniq
+  end
+
   private
 
   def valid_structure?
@@ -107,18 +130,6 @@ class TokenValidator::TokenService
     raise InvalidScope, "Missing scope: require at least one of #{@expected_scopes}" unless granted.intersect?(@expected_scopes)
 
     true
-  end
-
-  # Everything the token grants, from whichever of the three claims it carries, or nil when it
-  # carries none of them.
-  #
-  # Presence is decided by the claim being *there*, not by it holding anything: a token with an
-  # empty list has said it has no permissions, which is a different statement from saying nothing.
-  def granted_scopes
-    present = PERMISSION_CLAIMS.select { |claim| decoded_jwt.key?(claim) }
-    return nil if present.empty?
-
-    present.flat_map { |claim| scope_values(decoded_jwt[claim]) }.uniq
   end
 
   # A list is already a list of scopes; a string is split on whitespace, which is how OAuth 2.0

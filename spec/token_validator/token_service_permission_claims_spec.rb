@@ -140,4 +140,88 @@ RSpec.describe TokenValidator::TokenService do
       expect(rejection_for(token_granting(scope: 42))).to be_a(TokenValidator::TokenService::InvalidScope)
     end
   end
+
+  # LEN-1159. The union above decides whether a request is *allowed*; a consumer separately needs
+  # to know *what* it was allowed, to build its own per-request context. zetatango read the raw
+  # `scopes` claim to do that -- the only shape the primary issuer emits -- so under an Auth0 token
+  # its context was empty and every scope-dependent branch went dark, silently and with a 200.
+  #
+  # Exposing the union is what stops a consumer reimplementing it, badly. These examples pin the
+  # public contract, because a consumer now depends on it.
+  describe 'granted_scopes as a public reader' do
+    def service_for(token) = described_class.new(token, ['test:api'])
+
+    it 'is callable from outside the class' do
+      expect(service_for(token_granting(scopes: %w[test:api])).granted_scopes).to eq(%w[test:api])
+    end
+
+    it 'reads the claim the primary issuer emits' do
+      expect(service_for(token_granting(scopes: %w[test:api other:thing])).granted_scopes)
+        .to contain_exactly('test:api', 'other:thing')
+    end
+
+    it 'splits the space-separated string rather than returning it whole' do
+      # The string must not reach a caller intact: `include?` on a String matches a substring, so
+      # a caller asking `granted_scopes.include?('test:api')` of `"test:apikey"` would be told yes.
+      expect(service_for(token_granting(scope: 'other:thing test:api')).granted_scopes)
+        .to contain_exactly('test:api', 'other:thing')
+    end
+
+    it 'reads the role-based-access-control list' do
+      expect(service_for(token_granting(permissions: %w[test:api])).granted_scopes).to eq(%w[test:api])
+    end
+
+    it 'unions every claim the token carries, without duplicates' do
+      token = token_granting(scopes: %w[first:one shared:one], scope: 'second:one shared:one',
+                             permissions: %w[third:one shared:one])
+
+      expect(service_for(token).granted_scopes)
+        .to contain_exactly('first:one', 'second:one', 'third:one', 'shared:one')
+    end
+
+    # nil and [] are different answers and callers branch on the difference: nil means the token
+    # carried no permission claim at all, [] means it carried one and it was empty.
+    it 'answers nil when the token carries no permission claim' do
+      expect(service_for(token_granting).granted_scopes).to be_nil
+    end
+
+    it 'answers an empty list for a claim that is present and empty' do
+      expect(service_for(token_granting(permissions: [])).granted_scopes).to eq([])
+    end
+
+    it 'answers an empty list for a claim of an unrecognised shape' do
+      expect(service_for(token_granting(scope: 42)).granted_scopes).to eq([])
+    end
+
+    # Documented contract: it reads claims, so an unreadable token raises rather than answering
+    # nil. A caller must never mistake "could not be read" for "carried no permission claim" --
+    # the first is a rejection, the second is an authorisation decision.
+    #
+    # Which exception depends on how the token is broken, and both are pinned because the
+    # difference is not obvious from the code. `decode_segment` converts only NoMethodError and
+    # TypeError into JwtFormatException, so the jwt gem's own DecodeError reaches the caller
+    # unwrapped. That is pre-existing and true of `decoded_jwt` as well; it is recorded here so a
+    # later change that starts swallowing it is visible rather than silent.
+    it "raises the jwt gem's error for a token that does not decode" do
+      garbage = "#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}.#{SecureRandom.base64(32)}"
+
+      expect { service_for(garbage).granted_scopes }.to raise_error(JWT::DecodeError)
+    end
+
+    it 'raises JwtFormatException for a payload that decodes to something other than an object' do
+      segment = ->(raw) { Base64.urlsafe_encode64(raw, padding: false) }
+      not_an_object = "#{segment.call('{"alg":"RS512"}')}.#{segment.call('null')}.#{segment.call('signature')}"
+
+      expect { service_for(not_an_object).granted_scopes }
+        .to raise_error(TokenValidator::TokenService::JwtFormatException)
+    end
+
+    it 'agrees with the decision valid_access_token? reaches' do
+      token = token_granting(issuer: auth0_shape, scope: 'openid profile', permissions: %w[test:api])
+      service = described_class.new(token, ['test:api'])
+
+      expect(service.valid_access_token?).to be true
+      expect(service.granted_scopes).to include('test:api')
+    end
+  end
 end

@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    token_validator (0.7.0)
+    token_validator (0.7.1)
       json-jwt
       jwt
       rack

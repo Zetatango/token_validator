@@ -29,7 +29,19 @@ class TokenValidator::ValidatorConfig
   # This is why D21's rule that the invalid-entry exception names the index and key but never the
   # value stopped being a precaution and became load-bearing -- an entry can now hold a real
   # +client_secret+.
-  OPTIONAL_ISSUER_KEYS = %i[client_id client_secret token_url].freeze
+  # +claim_namespace+ is the prefix an issuer puts in front of every custom claim it emits, and it
+  # is configuration rather than a constant for two reasons. It is **tenant-specific** -- this
+  # repository is public, and an estate's claim namespace together with the claim names it carries
+  # is that estate's token schema; there is no reason to publish it here. And an issuer that emits
+  # custom claims *unprefixed* is expressed by omitting the key, which is what makes the primary
+  # issuer's entry byte-identical to one written before this key existed.
+  #
+  # It is a LITERAL PREFIX, concatenated with the claim name and nothing else. Whatever separator
+  # the namespace ends in belongs in the configured value -- +https://example.com/claims/+ keeps its
+  # trailing slash. This does not append one, because the convention is not universal (a +#+
+  # fragment is equally valid) and guessing would turn one estate's correct configuration into a
+  # namespace nobody emits.
+  OPTIONAL_ISSUER_KEYS = %i[client_id client_secret token_url claim_namespace].freeze
 
   # The algorithm the primary issuer has always signed with.
   PRIMARY_ISSUER_ALGORITHM = 'RS512'
@@ -143,9 +155,47 @@ class TokenValidator::ValidatorConfig
             "which is not one of #{PERMITTED_ISSUER_ALGORITHMS.join(', ')}"
     end
 
+    validated_claim_namespace(supported, index)
+
     supported.freeze
   end
   private_class_method :validated_issuer_entry
+
+  # REFUSED WHEN SUPPLIED BUT USELESS, because the failure it prevents is total and silent. The
+  # namespace is a literal prefix: get it wrong by one character and every namespaced claim reads
+  # nil, so a token verifies, a session is built, and every consumer of these claims behaves as
+  # though the token carried none of them. Nothing reports that. Refusing at boot is the only place
+  # it is cheap -- D21's rule that a consumer re-raises and the application refuses to start.
+  #
+  # An empty String is therefore rejected rather than treated as "no namespace". Omitting the key
+  # means unprefixed claims; supplying +''+ means an operator meant to configure something and
+  # produced a value that cannot work. Those are different mistakes and only one of them is silent.
+  #
+  # THE VALUE IS NAMED IN THE MESSAGE, and this is the second exception to D21 rather than a
+  # relaxation of it. The rule's own comment requires the argument be made explicitly, so: a claim
+  # namespace is not a secret. It is a prefix on claims inside every token this issuer signs,
+  # readable by anything holding one, and it is drawn from the issuer's published configuration --
+  # the same three properties that earned +algorithm+ its exception. It sits nowhere near
+  # +client_secret+ semantically, and an operator cannot fix a typo they cannot see.
+  def self.validated_claim_namespace(supported, index)
+    return supported unless supported.key?(:claim_namespace)
+
+    value = supported[:claim_namespace]
+
+    unless value.is_a?(String)
+      raise InvalidIssuerConfigException,
+            "additional_issuers[#{index}] claim_namespace must be a String, got #{value.class}"
+    end
+
+    if value.strip.empty?
+      raise InvalidIssuerConfigException,
+            "additional_issuers[#{index}] claim_namespace is blank -- omit the key for an issuer " \
+            'that emits unprefixed claims, rather than supplying a prefix that matches nothing'
+    end
+
+    supported
+  end
+  private_class_method :validated_claim_namespace
 
   # Read only the supported keys, in either symbol or string form. Anything else is dropped rather
   # than carried along, which is what `configure` does with keys it does not recognise -- and this

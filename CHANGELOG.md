@@ -7,6 +7,65 @@ Consumers pin a tag in their Gemfile (decision D23):
 gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
 
+## v0.8.0 — 2026-09-23
+
+Adds one shape for a token's custom claims, whichever issuer emitted them, and a per-issuer
+`claim_namespace` to describe where that issuer puts them. **Additive**: no existing behaviour
+changes, and an issuer entry that omits the new key is byte-identical to one written before it
+existed, so no caller of v0.7.x is affected by upgrading.
+
+### Added
+
+- `TokenValidator::ClaimNormalizer`, and `TokenService#normalized_claims` / `#namespaced_claims?`
+  on top of it. (LEN-1225)
+
+  The sibling of `granted_scopes`, for the same reason one release earlier. Where `granted_scopes`
+  answers what a token *permits*, this answers who and what it *describes* — and issuers disagree
+  about the claim **names** for all of it. One issuer emits custom claims unprefixed at the top
+  level; another requires every custom claim to sit under a namespace. A consumer reading a claim
+  directly gets a value from one issuer and `nil` from the other, and `nil` is indistinguishable
+  from "this token said nothing" — so the branch goes dark with no error and no log line. That is
+  the failure `granted_scopes` was made public to prevent for the permission claims; this is the
+  same failure for everything else.
+
+  Contract, pinned by spec because consumers depend on it:
+
+  - **the issuer is decided by `iss`**, via the same `issuer_config_for` lookup whose key and
+    algorithm the signature was verified against. The resolution happens once, so the namespace
+    used to read the claims and the key used to verify them cannot disagree. This is why it belongs
+    in this library rather than in each consumer
+  - **every key in `CLAIMS` is always present**, and a claim the token did not carry is `nil`.
+    Omitting absent claims would make `key?` a question about the issuer rather than about the token
+  - **a namespaced issuer is read only under its namespace**, with no fallback to the flat name. A
+    fallback would read a claim the issuer never asserted — anything at the top level of such a
+    token got there another way
+  - **`user_guid` prefers its claim and falls back to `sub`.** An issuer that has no such claim puts
+    the guid in the subject; one that does may have a subject of its own. Preferring the claim means
+    the contract decides, and the subject is never parsed
+  - `false` is preserved as `false`. A recorded opt-out is not an absence
+
+  Call it once `valid_access_token?` has answered true. Like `granted_scopes` it reads claims, so an
+  unreadable token raises rather than answering `nil`.
+
+- `claim_namespace`, a new **optional** per-issuer key in `additional_issuers`. (LEN-1225)
+
+  The literal prefix an issuer puts in front of each custom claim, concatenated with the claim name
+  and nothing else — whatever separator it ends in belongs in the configured value. Omit the key for
+  an issuer that emits unprefixed claims.
+
+  It is configuration rather than a constant in this library deliberately. A namespace together with
+  the claim names under it is a particular estate's token schema, and this repository is public;
+  values of that kind belong in the private consumer that owns them.
+
+  Supplying it blank, or as anything other than a String, **raises at configuration time**. A prefix
+  that matches nothing makes every namespaced claim read `nil` while the token still verifies, which
+  is the silent total failure this key exists to make impossible — boot is the only place it is
+  cheap to catch. An omitted key and an empty String are different mistakes and get different
+  answers. The exception names the offending value, which is the second and only other exception to
+  the rule that these messages name index and key alone: a claim namespace is not a secret, it
+  prefixes claims inside every token the issuer signs, and an operator cannot fix a typo they cannot
+  see.
+
 ## v0.7.1 — 2026-09-11
 
 Exposes the permission union that v0.7.0 introduced. **Purely additive**: one method moves from

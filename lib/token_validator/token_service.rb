@@ -90,6 +90,33 @@ class TokenValidator::TokenService
     present.flat_map { |claim| scope_values(decoded_jwt[claim]) }.uniq
   end
 
+  # Everything the token SAYS, in one shape whichever issuer emitted it (M4-05, LEN-1225).
+  #
+  # The sibling of +granted_scopes+, and public for the same reason one release earlier: a consumer
+  # forced to re-derive this will re-derive it differently. Where +granted_scopes+ answers what the
+  # token permits, this answers who and what it describes -- the user guid, the profile properties,
+  # the preferences -- and the two issuers disagree about the claim NAMES for all of it, not the
+  # values.
+  #
+  # THE NAMESPACE COMES FROM THE ISSUER ENTRY THE SIGNATURE WAS VERIFIED AGAINST, via
+  # +issuer_entry+. That is the whole reason this is a method here rather than something a consumer
+  # builds: the issuer is resolved exactly once, from +iss+, and the same resolution decides which
+  # key verifies the token and which namespace reads its claims. They cannot disagree.
+  #
+  # Call it once +valid_access_token?+ has answered true -- it reads claims, so like +granted_scopes+
+  # it raises on a token that cannot be read rather than answering nil. Nil is reserved for a claim
+  # the token did not carry, and the two must not be confused.
+  def normalized_claims
+    claim_normalizer.normalized
+  end
+
+  # Whether this token's issuer namespaces its custom claims. Exposed so a consumer can log or
+  # branch on the issuer WITHOUT inspecting +sub+ for a vendor-shaped subject, which is a guess that
+  # breaks the first time an issuer changes its subject format.
+  def namespaced_claims?
+    claim_normalizer.namespaced?
+  end
+
   private
 
   def valid_structure?
@@ -203,6 +230,12 @@ class TokenValidator::TokenService
   # one that did not sign it only makes it fail sooner.
   def issuer_entry
     TokenValidator::ValidatorConfig.issuer_config_for(decoded_jwt['iss'])
+  end
+
+  # Memoized because +normalized_claims+ and +namespaced_claims?+ both use it and +issuer_entry+
+  # walks the configured issuers on every call.
+  def claim_normalizer
+    @claim_normalizer ||= TokenValidator::ClaimNormalizer.new(decoded_jwt, issuer_entry)
   end
 
   # The three values that used to belong to the single provider -- +RS512+ as a literal, and the

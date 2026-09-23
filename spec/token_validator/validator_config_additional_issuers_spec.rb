@@ -293,4 +293,79 @@ RSpec.describe TokenValidator::ValidatorConfig do
       expect(mutable_entry[:algorithm]).not_to be_frozen
     end
   end
+
+  # M4-05 (LEN-1225). The namespace an issuer prefixes its custom claims with, kept here rather than
+  # as a constant in this library: it is one estate's token schema, and this repository is public.
+  describe 'claim_namespace' do
+    let(:base) do
+      { issuer_url: 'https://tenant.ca.auth0.com/', jwks_url: 'https://tenant.ca.auth0.com/.well-known/jwks.json',
+        audience: 'https://platform.example.com', algorithm: 'RS256' }
+    end
+
+    def configure_with(namespace)
+      described_class.additional_issuers = [base.merge(claim_namespace: namespace)]
+    end
+
+    it 'is stored when supplied' do
+      configure_with('https://claims.example.com/')
+
+      expect(described_class.additional_issuers.first[:claim_namespace]).to eq('https://claims.example.com/')
+    end
+
+    it 'is frozen like every other stored value' do
+      configure_with(+'https://claims.example.com/')
+
+      expect(described_class.additional_issuers.first[:claim_namespace]).to be_frozen
+    end
+
+    # AN ENTRY THAT OMITS IT MUST BE BYTE-IDENTICAL to one written before this key existed. Every
+    # example in this file that compares a whole entry depends on that, and so does the primary
+    # issuer, whose claims are unprefixed and which therefore never supplies one.
+    it 'is absent from an entry that does not supply it, not defaulted to nil' do
+      described_class.additional_issuers = [base]
+
+      expect(described_class.additional_issuers.first).to eq(base)
+      expect(described_class.additional_issuers.first).not_to have_key(:claim_namespace)
+    end
+
+    it 'is read from a string key as well as a symbol one' do
+      described_class.additional_issuers = [base.merge('claim_namespace' => 'https://claims.example.com/')]
+
+      expect(described_class.additional_issuers.first[:claim_namespace]).to eq('https://claims.example.com/')
+    end
+
+    # REFUSED WHEN SUPPLIED BUT UNUSABLE, because the failure is total and silent: a prefix that
+    # matches nothing makes every namespaced claim read nil, the token still verifies, and every
+    # consumer behaves as though it carried none of them. Boot is the only cheap place to catch it.
+    #
+    # An empty string is a different mistake from an omitted key and only one of them is silent, so
+    # they get different answers.
+    ['', '   '].each do |blank|
+      it "refuses #{blank.inspect}, rather than reading it as 'no namespace'" do
+        expect { configure_with(blank) }
+          .to raise_error(described_class::InvalidIssuerConfigException, /claim_namespace is blank/)
+      end
+    end
+
+    [123, :symbol, ['https://claims.example.com/'], { ns: 1 }].each do |bad|
+      it "refuses #{bad.class}, naming the type it got" do
+        expect { configure_with(bad) }
+          .to raise_error(described_class::InvalidIssuerConfigException,
+                          /claim_namespace must be a String, got #{bad.class}/)
+      end
+    end
+
+    # THE VALUE IS NAMED IN THE MESSAGE, which is the second exception to D21's rule that the
+    # message names index and key only. The argument is the one +algorithm+ made: a claim namespace
+    # is not a secret -- it prefixes claims inside every token the issuer signs, readable by
+    # anything holding one -- and an operator cannot fix a typo they cannot see.
+    it 'does not leak a neighbouring secret when it refuses' do
+      entry = base.merge(client_secret: 'super-secret-value', claim_namespace: '')
+
+      expect { described_class.additional_issuers = [entry] }
+        .to raise_error(described_class::InvalidIssuerConfigException) { |error|
+              expect(error.message).not_to include('super-secret-value')
+            }
+    end
+  end
 end

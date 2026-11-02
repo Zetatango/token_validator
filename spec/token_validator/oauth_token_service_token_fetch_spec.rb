@@ -97,6 +97,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       'an HTTP protocol error' => ->(stub) { stub.to_raise(Net::ProtocolError) },
       'a malformed response' => ->(stub) { stub.to_raise(Net::HTTPBadResponse) },
       'a malformed response header' => ->(stub) { stub.to_raise(Net::HTTPHeaderSyntaxError) },
+      'a corrupt compressed body' => ->(stub) { stub.to_raise(Zlib::DataError) },
+      'a truncated compressed body' => ->(stub) { stub.to_raise(Zlib::BufError) },
       'a broken stream' => ->(stub) { stub.to_raise(IOError) },
       'a timeout' => lambda(&:to_timeout),
       'a refusal' => ->(stub) { stub.to_return(status: 401) },

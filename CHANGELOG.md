@@ -76,7 +76,8 @@ additional issuer sees the changes below on that issuer's path only.
 - **Each of these failures is a clean answer**: no machine token (nil, an empty header), or a
   refused token for verification.
   - DNS failures, connection resets, unreachable hosts, TLS and other OpenSSL errors, malformed HTTP
-    responses and broken streams, which the HTTP client does not wrap in its own exceptions;
+    responses, compressed bodies that cannot be decompressed and broken streams, which the HTTP
+    client does not wrap in its own exceptions;
   - a key set that is not JSON, is a JSON value other than an object, has no list of keys, or holds
     no key that can verify a signature;
   - a published key that cannot be turned into a verification key. It is left out of the set, so a

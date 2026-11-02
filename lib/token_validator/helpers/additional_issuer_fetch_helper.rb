@@ -3,6 +3,7 @@
 require 'active_support/core_ext/numeric/time'
 require 'rails'
 require 'rest-client'
+require 'zlib'
 
 # How machine tokens are obtained from an additional issuer: any trusted issuer other than the
 # primary one. Also the fetching machinery AdditionalIssuerSigningKeyHelper uses for that issuer's
@@ -31,10 +32,10 @@ module TokenValidator::AdditionalIssuerFetchHelper
 
   # Every way a fetch is known to fail. The HTTP client wraps HTTP errors and timeouts in its own
   # exceptions, but lets DNS failures, connection resets, TLS and other OpenSSL errors, malformed
-  # responses and broken streams through as they are.
+  # responses, compressed bodies that cannot be decompressed and broken streams through as they are.
   FETCH_FAILURES = [
     RestClient::Exception, SocketError, SystemCallError, OpenSSL::OpenSSLError, IOError, Net::ProtocolError,
-    Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, JSON::ParserError, UnusableResponse
+    Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Zlib::Error, JSON::ParserError, UnusableResponse
   ].freeze
 
   FAILED_FETCH_KEY = 'failed-fetch'

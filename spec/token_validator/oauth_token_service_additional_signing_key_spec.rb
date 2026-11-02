@@ -360,6 +360,7 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
     end
 
+    # The write fails because the slot is held, which the working cache shows when read back.
     it 'takes no slot of its own while another process holds the minute, so it may fetch once that ends' do
       service.refetch_signing_key(auth0_issuer)
       service.send(:forget_process_markers)
@@ -384,12 +385,16 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
     end
 
-    it 'does not fetch when the cache cannot record the refetch' do
+    # The write fails without any process holding the minute, as when Redis is unreachable.
+    it 'counts the minute in this process alone when the cache can neither record it nor show it held' do
       allow(cache).to receive(:write).and_call_original
       allow(cache).to receive(:write).with(anything, anything, hash_including(unless_exist: true)).and_return(false)
 
-      expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(['a'])
-      expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
+      expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
+      Timecop.travel(Time.now + 59.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+      Timecop.travel(Time.now + 61.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
     end
   end
 

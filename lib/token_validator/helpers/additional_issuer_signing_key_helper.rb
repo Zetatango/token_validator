@@ -47,8 +47,9 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
 
   # For a token naming a key id the cached set lacks, which usually means the issuer rotated its keys.
   # Fetched again at most once per JWKS_REFETCH_COOLDOWN per issuer, across every process sharing the
-  # cache; inside the cooldown the cached set is answered as it stands. A failed fetch answers nil and
-  # leaves the cached set in place, so it can never cost valid tokens their keys.
+  # cache, or in each process while the cache keeps nothing; inside the cooldown the cached set is
+  # answered as it stands. A failed fetch answers nil and leaves the cached set in place, so it can
+  # never cost valid tokens their keys.
   #
   # During a backoff nothing is fetched and the answer is nil, as it was for the fetch that failed.
   # The refetch slot is left alone then, so a rotated key can be fetched as soon as the backoff ends.
@@ -128,16 +129,22 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
 
   # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in the cache shared with
   # other processes and then in this process. The process's own slot holds the limit when the cache
-  # keeps nothing. It is taken only once the shared slot is won, so a slot another process holds never
-  # keeps this one waiting past that slot's end. A cache that refuses the write answers no, which is
-  # the safe direction: the token is refused and the cached keys stand.
+  # keeps nothing. It is taken only once the shared slot is won or cannot be kept, so a slot another
+  # process holds never keeps this one waiting past that slot's end.
   def refetch_allowed?(entry)
     marker = jwks_refetch_key(entry)
     return false if marked_in_process?(marker)
-    return false unless Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+    return false if refetch_slot_held_elsewhere?(marker)
 
     mark_in_process(marker, JWKS_REFETCH_COOLDOWN)
     true
+  end
+
+  # Tries to take the shared slot. A refused write means another process holds the slot only when the
+  # slot can be read back. When it cannot, the cache is unreachable or keeps nothing, and this
+  # process's own slot alone limits the refetch, so a rotated key is still fetched at once.
+  def refetch_slot_held_elsewhere?(marker)
+    !Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN) && Rails.cache.exist?(marker, namespace:)
   end
 
   def download_additional_signing_key(entry)

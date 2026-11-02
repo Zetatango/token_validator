@@ -220,6 +220,20 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
     end
 
+    it 'releases the refresh lock when an exception is raised into the thread just as it takes the lock' do
+      interrupted = Class.new(StandardError)
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
+      service.signing_key(auth0_issuer)
+      Timecop.travel(Time.now + 61.minutes)
+      lock = service.send(:flight_lock, jwks_cache_key)
+      allow(lock).to(receive(:try_lock).and_wrap_original { |try_lock| try_lock.call.tap { Thread.current.raise(interrupted) } })
+
+      expect { service.signing_key(auth0_issuer) }.to raise_error(interrupted)
+      expect(lock).not_to be_locked
+    ensure
+      lock.unlock if lock&.owned?
+    end
+
     it 'lets the next caller refresh after a refresh that raised an unexpected error' do
       stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
       service.signing_key(auth0_issuer)

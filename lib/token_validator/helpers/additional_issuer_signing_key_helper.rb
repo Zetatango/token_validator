@@ -66,15 +66,18 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   # One thread refreshes; the others carry on with the stale set rather than wait, since it still
   # verifies every token signed by a key the issuer has not withdrawn. The thread that takes the lock
   # looks again first, in case another finished a refresh after this one found the set stale.
+  #
+  # The lock is taken with interrupts held back, so an exception raised into this thread (a request
+  # timeout, say) arrives only once taking it has been recorded, and the ensure then releases it.
   def refresh_stale_signing_key(entry, stale_keys)
     lock = flight_lock(jwks_cache_key(entry[:issuer_url]))
-    return stale_keys unless lock.try_lock
+    locked = false
+    Thread.handle_interrupt(Object => :never) { locked = lock.try_lock }
+    return stale_keys unless locked
 
-    begin
-      fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
-    ensure
-      lock.unlock
-    end
+    fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
+  ensure
+    lock.unlock if locked
   end
 
   # Fetches the issuer's keys and, only when that succeeds, replaces the cached set with them. A

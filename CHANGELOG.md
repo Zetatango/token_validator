@@ -110,8 +110,8 @@ additional issuer sees the changes below on that issuer's path only.
   None of these responses is cached.
 
   Each failure is logged once, naming the issuer, the audience (quoted and escaped, so it stays on
-  one line) and the error class or what was wrong with the response. Nothing from the response body is ever logged, because a body can echo a
-  credential.
+  one line) and the error class or what was wrong with the response. Nothing from the response body
+  is ever logged, because a body can echo a credential.
 
 ### Not changed
 

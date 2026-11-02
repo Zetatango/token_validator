@@ -138,6 +138,20 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  describe 'a key rotated in while the key endpoint is failing' do
+    it 'keeps the cached keys throughout, and offers the new key once the endpoint is back and a minute has passed' do
+      stub_request(:get, AdditionalIssuerContext::EXTRA_JWKS_URL)
+        .to_return(key_set_response('old'), { status: 503 }, key_set_response('old', 'rotated'))
+      extra_keys
+
+      at(1.hour + 1) { expect(kids_of(extra_keys)).to eq(['old']) }
+      at(1.hour + 5) { expect(refetched_extra_keys).to be_nil }
+      at(1.hour + 5) { expect(kids_of(extra_keys)).to eq(['old']) }
+
+      at(1.hour + 65) { expect(kids_of(refetched_extra_keys)).to eq(%w[old rotated]) }
+    end
+  end
+
   describe 'after a failed signing key fetch' do
     it 'does not ask again until 10 seconds have passed, then does' do
       stub_request(:get, AdditionalIssuerContext::EXTRA_JWKS_URL).to_return({ status: 503 }, key_set_response('a'))

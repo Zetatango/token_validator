@@ -105,6 +105,21 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(log_lines.string).not_to include('auth0-secret')
     end
 
+    # One of each way json-jwt was seen to fail converting a published key.
+    {
+      'missing its modulus' => { kty: 'RSA', kid: 'x', e: 'AQAB' },
+      'whose modulus is not a string' => { kty: 'RSA', kid: 'x', n: 5, e: 'AQAB' },
+      'whose modulus is not base64' => { kty: 'RSA', kid: 'x', n: '!!!', e: 'AQAB' },
+      'of no known type' => { kid: 'x' },
+      'whose point is not on its curve' => { kty: 'EC', kid: 'x', crv: 'P-256', x: 'AA', y: 'AA' }
+    }.each do |shape, unusable_key|
+      it "leaves out a key #{shape}, and keeps the rest" do
+        stub_request(:get, auth0_jwks_url).to_return(status: 200, body: { keys: [unusable_key, jwk('a')] }.to_json)
+
+        expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
+      end
+    end
+
     it 'keeps the usable keys of a set that also holds unusable ones, and says how many it left out' do
       stub_request(:get, auth0_jwks_url).to_return(status: 200, body: { keys: [jwk('a'), { kty: 'RSA', kid: 'b' }, 7] }.to_json)
 

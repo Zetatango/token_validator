@@ -238,7 +238,7 @@ RSpec.describe TokenValidator::OauthTokenService do
       hold_token_endpoint
       first, second = concurrent_pair(orders_api, billing_api)
 
-      expect(arrived.pop).to eq(billing_api)
+      expect(arrived.pop(timeout: 2)).to eq(billing_api)
       2.times { release << :go }
       expect([first, second].map { |thread| thread.value&.fetch(:token) }).to eq(%w[auth0-token auth0-token])
     end

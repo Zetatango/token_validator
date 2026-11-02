@@ -68,8 +68,8 @@ RSpec.describe TokenValidator::OauthTokenService do
     expect(RestClient::Request).to have_received(:execute).with(hash_including(method: :get, open_timeout: 5, read_timeout: 10))
   end
 
-  # Each of these used to raise out of the fetch. Now each answers no keys, so a token naming the
-  # issuer is refused rather than turned into a server error.
+  # Each of these answers no keys, so a token naming the issuer is refused rather than turned into a
+  # server error.
   describe 'a key set that cannot be fetched or used' do
     {
       'a DNS failure' => ->(stub) { stub.to_raise(SocketError) },
@@ -206,8 +206,8 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
-  # Called for a token naming a key id the cached set lacks: a rotation in the normal case, and an
-  # unauthenticated stranger's token in the bad one.
+  # Called for a token naming a key id the cached set lacks, which usually means the issuer rotated
+  # its keys.
   describe 'refetching for an unknown key id' do
     before do
       with_cache

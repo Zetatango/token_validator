@@ -3,8 +3,8 @@
 require 'spec_helper'
 
 # Verifying an additional issuer's token when its key set misbehaves, and when a token names a key id
-# the cached set lacks. Every such token is refused -- false, never an exception -- and a stranger's
-# token can neither make every request a key fetch nor cost valid callers the keys already cached.
+# the cached set lacks. Every such token is refused (false, not an exception); the issuer's keys are
+# fetched again at most once a minute, and the keys already cached stay in place.
 RSpec.describe TokenValidator::TokenService do
   include MultiIssuerTokens
 
@@ -83,7 +83,7 @@ RSpec.describe TokenValidator::TokenService do
       expect(validates?(auth0_token(key: next_auth0_key, kid: 'auth0-next'))).to be true
     end
 
-    it 'still accepts a rotated key once the cooldown a stranger started has passed' do
+    it 'still accepts a rotated key once the cooldown an unknown key id started has passed' do
       stub_request(:get, auth0_jwks_url)
         .to_return(auth0_key_set([auth0_key, auth0_kid]), auth0_key_set([auth0_key, auth0_kid]),
                    auth0_key_set([auth0_key, auth0_kid], [next_auth0_key, 'auth0-next']))

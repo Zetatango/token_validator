@@ -80,8 +80,7 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
-  # Every way the fetch can fail answers nil -- and an empty header -- rather than raising into the
-  # caller. Each of these escaped as an exception, or produced an empty bearer token, before.
+  # Each of these failures answers nil -- and an empty header -- rather than raising into the caller.
   describe 'a failed fetch' do
     {
       'a DNS failure' => ->(stub) { stub.to_raise(SocketError) },

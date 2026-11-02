@@ -15,8 +15,8 @@ require 'rails'
 # it has always been.
 module TokenValidator::AdditionalIssuerSigningKeyHelper
   # How often a token naming a key id the cached set lacks may make this library fetch an issuer's
-  # keys again. The key id and the issuer both come from a token nobody has authenticated yet, so
-  # without a limit anyone could turn every request into a fetch.
+  # keys again. The key id and the issuer come from a token not yet verified, so the limit keeps an
+  # issuer's key fetches to this rate whatever key ids incoming tokens name.
   JWKS_REFETCH_COOLDOWN = 1.minute
 
   # Cached keys are fetched again once they are this old. When that fetch fails the cached set stays

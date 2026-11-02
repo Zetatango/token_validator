@@ -68,8 +68,8 @@ module TokenValidator::TokenCacheHelper
   # +issuer+'s signing keys fetched again, for a token naming a key id the cached set does not hold.
   # Answers the set to search, or nil when there is none.
   #
-  # The primary issuer's keys are dropped and fetched again every time, as they always have been. An
-  # additional issuer's are refetched under a cooldown, and kept when the refetch fails; see
+  # The primary issuer's keys are dropped and fetched again, as they always have been. An additional
+  # issuer's are refetched under a cooldown, and kept when the refetch fails; see
   # AdditionalIssuerSigningKeyHelper.
   def fetch_signing_key_again(issuer = nil)
     entry = issuer_entry_for(issuer)

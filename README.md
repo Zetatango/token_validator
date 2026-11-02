@@ -87,7 +87,7 @@ unchanged.
 
 - **Timeouts:** 5 s to connect and 10 s to read.
 - **Failures** answer no token, or a refused token for verification, and are logged without anything
-  from the response. They never raise.
+  from the response.
 - **Backoff:** after a failed fetch the same thing is not asked for again for 10 s.
 - **Unknown key ids:** an issuer's keys are fetched again for one at most once a minute, and the
   fetched set replaces the cached one only when the fetch succeeded.

@@ -81,7 +81,7 @@ module TokenValidator::AdditionalIssuerFetchHelper
   def request_additional_access_token(entry, audience)
     access_token_from(fetch_json_object(:post, token_endpoint_for(entry), access_token_params(entry, audience)))
   rescue *FETCH_FAILURES => e
-    report_failed_fetch(entry_audience?(audience) ? 'a machine token' : "a machine token for #{audience}", entry, e)
+    report_failed_fetch(entry_audience?(audience) ? 'a machine token' : "a machine token for #{audience.inspect}", entry, e)
     nil
   end
 
@@ -174,7 +174,8 @@ module TokenValidator::AdditionalIssuerFetchHelper
   end
 
   # Names the error's class, or what was wrong with a response, and never anything the response
-  # carried, since a body can echo a credential.
+  # carried, since a body can echo a credential. An audience comes from the caller, so it is logged
+  # quoted and escaped, which keeps it on the one line.
   def report_failed_fetch(what, entry, error)
     reason = error.is_a?(UnusableResponse) ? error.message : error.class.name
     TokenValidator::ValidatorConfig.logger.error("Could not fetch #{what} from #{entry[:issuer_url]}: #{reason}")

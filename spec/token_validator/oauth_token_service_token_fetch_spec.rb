@@ -149,7 +149,16 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       token_for(orders_api)
 
-      expect(log_lines.string).to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: SocketError")
+      expect(log_lines.string).to include("Could not fetch a machine token for #{orders_api.inspect} from #{auth0_issuer}: SocketError")
+    end
+
+    it 'logs the audience quoted and escaped, on one line' do
+      stub_request(:post, auth0_token_url).to_return(status: 503)
+
+      token_for("#{orders_api}\nsecond line")
+
+      expect(log_lines.string.lines.size).to eq(1)
+      expect(log_lines.string).to include('a machine token for "https://api.example.com/orders\\nsecond line" from')
     end
 
     it 'says what was wrong with a response it could not use' do
@@ -210,7 +219,7 @@ RSpec.describe TokenValidator::OauthTokenService do
       token_for(orders_api)
 
       expect(log_lines.string)
-        .to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
+        .to include("Could not fetch a machine token for #{orders_api.inspect} from #{auth0_issuer}: #{unusable_lifetime}")
     end
 
     it 'does not raise when the cache refuses a negative expiry' do
@@ -260,7 +269,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       token_for(orders_api)
 
-      expect(log_lines.string).to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
+      expect(log_lines.string).to include("Could not fetch a machine token for #{orders_api.inspect} from #{auth0_issuer}: #{unusable_lifetime}")
     end
   end
 
@@ -307,7 +316,7 @@ RSpec.describe TokenValidator::OauthTokenService do
       token_for(orders_api)
 
       expect(log_lines.string.lines).to contain_exactly(
-        a_string_including("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
+        a_string_including("Could not fetch a machine token for #{orders_api.inspect} from #{auth0_issuer}: #{unusable_lifetime}")
       )
     end
   end

@@ -180,7 +180,7 @@ RSpec.describe TokenValidator::OauthTokenService do
     def hold_endpoint_until_released(arrived, release)
       stub_request(:post, AdditionalIssuerContext::EXTRA_TOKEN_URL).to_return do
         arrived << :fetching
-        release.pop
+        release.pop(timeout: 10)
         { status: 200, body: token_body }
       end
     end
@@ -190,7 +190,7 @@ RSpec.describe TokenValidator::OauthTokenService do
       release = Queue.new
       hold_endpoint_until_released(arrived, release)
       fetcher = Thread.new { token_for(orders_api) }
-      arrived.pop
+      arrived.pop(timeout: 5) || raise('the fetch for the first audience never reached the endpoint')
 
       expect(values_of(Thread.new { [token_for(nil), token_for('')] }, timeout: 2).first).to eq([nil, nil])
 

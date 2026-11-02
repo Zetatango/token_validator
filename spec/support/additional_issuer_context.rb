@@ -29,6 +29,17 @@ module AdditionalIssuerContext
       false
     end
   end
+
+  # Cache that turns an expiry into whole milliseconds before storing, as a Redis-backed store does.
+  # That arithmetic raises for an infinite expiry, which an in-memory store accepts.
+  class MillisecondExpiryStore < ActiveSupport::Cache::MemoryStore
+    protected
+
+    def write_entry(key, entry, **options)
+      (1000 * options[:expires_in].to_f).ceil if options[:expires_in]
+      super
+    end
+  end
 end
 
 RSpec.shared_context 'with an additional issuer' do

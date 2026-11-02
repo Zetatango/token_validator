@@ -211,6 +211,22 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  describe 'a token response whose lifetime is not a finite number' do
+    before { stub_request(:post, token_url).to_return(status: 200, body: '{"access_token":"t","expires_in":1e999}') }
+
+    it 'never raises when the cache turns an expiry into whole milliseconds' do
+      use_cache(AdditionalIssuerContext::MillisecondExpiryStore.new)
+
+      expect { token_for(orders_api) }.not_to raise_error
+    end
+
+    it 'never raises when the cache keeps expiries as they are' do
+      use_cache
+
+      expect { token_for(orders_api) }.not_to raise_error
+    end
+  end
+
   describe 'a token response whose lifetime is just over the three minutes held back' do
     before do
       use_cache

@@ -4,11 +4,12 @@ require 'rails'
 require 'rest-client'
 
 # How machine tokens are obtained from an additional issuer: any trusted issuer other than the
-# primary one.
+# primary one. Also the fetching machinery AdditionalIssuerSigningKeyHelper uses for that issuer's
+# keys.
 #
 # Every fetch has explicit timeouts, and every way it can fail answers nil rather than raising. After
 # a failure the same thing is not asked for again for a short while, and within one process only one
-# thread fetches a given token at a time.
+# thread fetches a given thing at a time.
 #
 # Kept apart from the primary issuer's path in TokenCacheHelper, which decides which of the two a
 # request takes. The primary path stays exactly as it has always behaved, failures included, so
@@ -19,8 +20,9 @@ module TokenValidator::AdditionalIssuerFetchHelper
   FETCH_OPEN_TIMEOUT = 5
   FETCH_READ_TIMEOUT = 10
 
-  # After a failed fetch, how long the same token is not asked for again. Calls in the meantime
-  # answer nil, as the failed fetch did, rather than each waiting on an endpoint that just failed.
+  # After a failed fetch, how long the same thing -- one token, or one issuer's keys -- is not asked
+  # for again. Calls in the meantime answer as the failed fetch did, rather than each waiting on an
+  # endpoint that just failed.
   FAILED_FETCH_BACKOFF = 10.seconds
 
   # A response that arrived but cannot be used. Raised and rescued within this module only.

@@ -27,8 +27,9 @@ module TokenValidator::TokenCacheHelper
   # issuer can be asked for a particular audience. The primary issuer is never sent one, so asking it
   # for one answers nil rather than a token for some other API.
   #
-  # THE TWO KINDS OF ISSUER ARE FETCHED FROM SEPARATELY. The primary issuer's path, here, is the one
-  # this library has always had. Every other issuer goes through AdditionalIssuerFetchHelper.
+  # THE TWO KINDS OF ISSUER ARE FETCHED FROM SEPARATELY, here and in the two methods that fetch
+  # signing keys. The primary issuer's path is the one this library has always had. Every other
+  # issuer goes through AdditionalIssuerFetchHelper and AdditionalIssuerSigningKeyHelper.
   def fetch_access_token(issuer = nil, audience: ENTRY_AUDIENCE)
     entry = issuer_entry_for(issuer)
     return nil if entry.nil? || !machine_token_credentials?(entry)
@@ -57,10 +58,26 @@ module TokenValidator::TokenCacheHelper
     # issuer's keys is deliberate: a fallback here is exactly the cross-issuer confusion the
     # per-issuer cache exists to prevent.
     return nil if entry.nil?
+    return additional_issuer_signing_key(entry) unless primary_issuer?(entry)
 
     return download_signing_key(entry[:jwks_url]) if Rails.cache.nil?
 
     Rails.cache.fetch(jwks_cache_key(entry[:issuer_url]), namespace:) { download_signing_key(entry[:jwks_url]) }
+  end
+
+  # +issuer+'s signing keys fetched again, for a token naming a key id the cached set does not hold.
+  # Answers the set to search, or nil when there is none.
+  #
+  # The primary issuer's keys are dropped and fetched again every time, as they always have been. An
+  # additional issuer's are refetched under a cooldown, and kept when the refetch fails; see
+  # AdditionalIssuerSigningKeyHelper.
+  def fetch_signing_key_again(issuer = nil)
+    entry = issuer_entry_for(issuer)
+    return nil if entry.nil?
+    return refetched_additional_signing_key(entry) unless primary_issuer?(entry)
+
+    evict_signing_key(issuer)
+    fetch_signing_key(issuer)
   end
 
   def clear_cache_if_available
@@ -106,11 +123,7 @@ module TokenValidator::TokenCacheHelper
     # hash against being nil; both are dropped here without any change in behaviour.
     response = JSON.parse(RestClient.post(oauth_path(:token), primary_access_token_params))
 
-    access_token = {
-      token: response['access_token'],
-      expires: Time.now.to_i + response['expires_in'],
-      expires_in: response['expires_in']
-    }
+    access_token = { token: response['access_token'], expires: Time.now.to_i + response['expires_in'], expires_in: response['expires_in'] }
 
     store_access_token(cache_key, access_token)
 

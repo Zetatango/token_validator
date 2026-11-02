@@ -7,6 +7,7 @@ class TokenValidator::OauthTokenService
   include Singleton
   include TokenValidator::TokenCacheHelper
   include TokenValidator::AdditionalIssuerFetchHelper
+  include TokenValidator::AdditionalIssuerSigningKeyHelper
 
   # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
   #
@@ -49,6 +50,16 @@ class TokenValidator::OauthTokenService
   def clear
     clear_cache_if_available
     @access_token = nil
+  end
+
+  # Fetches +issuer+'s signing keys again for a token naming a key id the cached set does not hold,
+  # and answers the set to search (nil when there is none). +issuer+ omitted means the primary issuer.
+  #
+  # For an additional issuer this happens at most once a minute per issuer, and a failed fetch keeps
+  # the keys already cached. That makes it the safer call for a consumer verifying tokens itself:
+  # +clear_signing_key+ drops the cached keys whether or not new ones can be fetched.
+  def refetch_signing_key(issuer = nil)
+    fetch_signing_key_again(issuer)
   end
 
   # Forgets one issuer's signing keys, leaving every other issuer's cache -- and every machine

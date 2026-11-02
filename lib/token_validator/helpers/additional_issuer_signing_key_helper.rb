@@ -63,6 +63,13 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     end
   end
 
+  # What clearing an additional issuer's keys does: the refetch made for an unknown key id, under the
+  # same limit, so the keys valid callers rely on stay in place unless a fetch replaces them. Without
+  # a cache there is nothing to clear, and nothing is fetched.
+  def cleared_additional_signing_key(entry)
+    refetched_additional_signing_key(entry) unless Rails.cache.nil?
+  end
+
   # One thread refreshes; the others carry on with the stale set rather than wait, since it still
   # verifies every token signed by a key the issuer has not withdrawn. The thread that takes the lock
   # looks again first, in case another finished a refresh after this one found the set stale.

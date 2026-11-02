@@ -43,7 +43,15 @@ additional issuer sees the changes below on that issuer's path only.
   token naming a key id the cached set lacks, and answers the set to search. `TokenService` now uses
   it in place of `clear_signing_key`. For the primary issuer it does exactly what that retry always
   did. For an additional issuer it is limited and keeps the cached keys when it fails (below), which
-  makes it the call to use for a consumer verifying tokens itself. `clear_signing_key` is unchanged.
+  makes it the call to use for a consumer verifying tokens itself.
+
+### Changed — `clear_signing_key` for an additional issuer
+
+- `OauthTokenService#clear_signing_key(issuer)` naming an additional issuer now does what
+  `refetch_signing_key` does: it fetches that issuer's keys again under the same limit, and the
+  cached keys stay in place unless the fetch succeeds. A consumer that clears and then asks for the
+  keys again on an unknown key id therefore keeps verifying valid tokens when that fetch fails. With
+  no cache configured it fetches nothing. For the primary issuer it is unchanged.
 
 ### Changed — additional issuers only
 

@@ -92,9 +92,13 @@ module TokenValidator::TokenCacheHelper
   # instead would let an unknown +kid+ -- a value the token controls, on a request that has not been
   # authenticated yet -- evict every *other* issuer's keys and machine tokens, turning a bad token
   # into a cache flush and a round of refetches.
+  #
+  # An additional issuer's keys are never dropped. They are fetched again under the refetch limit
+  # instead, and replaced only by a fetch that succeeds; see AdditionalIssuerSigningKeyHelper.
   def evict_signing_key(issuer = nil)
     entry = issuer_entry_for(issuer)
     return if entry.nil?
+    return cleared_additional_signing_key(entry) unless primary_issuer?(entry)
 
     Rails.cache&.delete(jwks_cache_key(entry[:issuer_url]), namespace:)
   end

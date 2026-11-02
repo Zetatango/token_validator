@@ -98,7 +98,8 @@ unchanged.
   fetched set replaces the cached one only when the fetch succeeded. `TokenService` does this for
   you. A consumer verifying tokens itself should call
   `OauthTokenService.instance.refetch_signing_key(issuer)` for a token naming a key id it cannot find:
-  it answers the set to search, or `nil` when there is none.
+  it answers the set to search, or `nil` when there is none. `clear_signing_key(issuer)` on an
+  additional issuer does the same, so it never leaves that issuer without keys.
 - **Key expiry:** cached keys are refreshed hourly. If the refresh fails they stay in use for up to a
   day.
 - **One fetch at a time:** within a process, callers that miss the cache together share one fetch.

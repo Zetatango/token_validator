@@ -7,6 +7,17 @@ require 'spec_helper'
 # process for callers that need the same token.
 module TokenValidatorTokenFetchSpec
   Application = Class.new
+
+  # Turns an expiry into whole milliseconds before storing, as Rails' Redis store does. That
+  # arithmetic raises for an infinite expiry, which an in-memory store keeps as it is.
+  class MillisecondExpiryStore < ActiveSupport::Cache::MemoryStore
+    protected
+
+    def write_entry(key, entry, **options)
+      (1000 * options[:expires_in].to_f).ceil if options[:expires_in]
+      super
+    end
+  end
 end
 
 RSpec.describe TokenValidator::OauthTokenService do
@@ -206,6 +217,54 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       expect(token_for(orders_api)).to be_nil
       expect(requests_for(orders_api)).to have_been_made.twice
+    end
+  end
+
+  # Ruby's JSON parser reads a number too large for a Float, such as 1e999, as Infinity. A token with
+  # that lifetime is refused as unusable rather than cached forever or passed to the cache to fail on.
+  describe 'a token whose lifetime is not a finite number' do
+    before { stub_request(:post, auth0_token_url).to_return(status: 200, body: '{"access_token":"auth0-token","expires_in":1e999}') }
+
+    def with_a_cache_that_counts_milliseconds
+      allow(Rails).to receive_messages(cache: TokenValidatorTokenFetchSpec::MillisecondExpiryStore.new,
+                                       application: TokenValidatorTokenFetchSpec::Application.new)
+    end
+
+    it 'answers nil from a cache that turns an expiry into milliseconds' do
+      with_a_cache_that_counts_milliseconds
+
+      expect(token_for(orders_api)).to be_nil
+    end
+
+    it 'answers an empty header from a cache that turns an expiry into milliseconds' do
+      with_a_cache_that_counts_milliseconds
+
+      expect(service.oauth_auth_header(auth0_issuer, audience: orders_api)).to eq({})
+    end
+
+    it 'answers nil, and caches nothing, in a cache that keeps any expiry' do
+      with_cache
+
+      expect(token_for(orders_api)).to be_nil
+      expect(cache.read(service.send(:access_token_cache_key, auth0_issuer, orders_api), namespace: service.send(:namespace))).to be_nil
+    end
+
+    it 'counts as a failed fetch, so it is not asked for again within the backoff' do
+      with_cache
+      token_for(orders_api)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'logs once that the lifetime is not a finite number, naming the issuer and the audience' do
+      with_cache
+
+      token_for(orders_api)
+
+      expect(log_lines.string.lines).to contain_exactly(
+        a_string_including("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: the token lifetime is not a finite number")
+      )
     end
   end
 

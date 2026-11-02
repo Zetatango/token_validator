@@ -82,6 +82,7 @@ module TokenValidator::AdditionalIssuerFetchHelper
     expires_in = response['expires_in']
     raise UnusableResponse, 'the token response has no access_token' unless token.is_a?(String) && !token.empty?
     raise UnusableResponse, 'the token response has no numeric expires_in' unless expires_in.is_a?(Numeric)
+    raise UnusableResponse, 'the token lifetime is not a finite number' unless expires_in.finite?
     raise UnusableResponse, 'the token lifetime is too short to use: 180 s or less' unless usable_lifetime?(expires_in)
 
     { token:, expires: Time.now.to_i + expires_in, expires_in: }

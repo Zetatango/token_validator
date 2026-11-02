@@ -15,13 +15,13 @@ RSpec.describe TokenValidator::OauthTokenService do
   describe 'a cache that refuses every write' do
     before { use_cache(AdditionalIssuerContext::WriteRefusingStore.new) }
 
-    it 'still hands out the token it fetched, fetching again on the next call' do
+    it 'still hands out the token it fetched, which the process keeps for the next calls' do
       stub_token_endpoint_echoing_audience
 
       tokens = Array.new(3) { token_for(orders_api) }
 
       expect(tokens.map { |token| token[:token] }).to all(eq("token-for-#{orders_api}"))
-      expect(token_requests(orders_api)).to have_been_made.times(3)
+      expect(token_requests(orders_api)).to have_been_made.once
     end
 
     it 'still answers nil, without raising, when the token cannot be fetched' do
@@ -30,11 +30,11 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(Array.new(3) { token_for(orders_api) }).to all(be_nil)
     end
 
-    it 'still answers the keys it fetched, fetching again on the next call' do
+    it 'still answers the keys it fetched, which the process keeps for the next calls' do
       stub_request(:get, jwks_url).to_return(key_set_response('a'))
 
       expect(Array.new(3) { kids_of(extra_keys) }).to all(eq(['a']))
-      expect(key_requests).to have_been_made.times(3)
+      expect(key_requests).to have_been_made.once
     end
   end
 

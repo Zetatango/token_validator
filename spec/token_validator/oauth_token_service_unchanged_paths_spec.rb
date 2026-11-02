@@ -5,11 +5,9 @@ require 'spec_helper'
 # Behaviour that must survive this library's per-audience machine tokens and its hardened fetching
 # untouched, pinned against the code as it stood before either existed.
 #
-# Two paths are covered. The primary issuer keeps every part of its behaviour, failures included:
-# the client library's default timeouts, the exceptions it has always let escape, no backoff after a
-# failure, no limit on refetching keys and no expiry on cached keys. An additional issuer asked for a
-# machine token *without* an audience keeps the request it sends, the cache entry it writes and the
-# nil it answers on failure.
+# Two paths are covered. The primary issuer is unchanged, failures included. An additional issuer
+# asked for a machine token *without* an audience keeps the request it sends, the cache entry it
+# writes and the nil it answers on failure.
 module TokenValidatorUnchangedPathsSpec
   Application = Class.new
   SIGNING_KEY = OpenSSL::PKey::RSA.new(2048)

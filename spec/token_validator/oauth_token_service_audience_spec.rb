@@ -166,4 +166,23 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:post, //)).not_to have_been_made
     end
   end
+
+  # An entry may list several audiences so that tokens naming any of them verify. A token is asked for
+  # one API at a time, so the list is never sent to the token endpoint.
+  describe 'an entry that lists several audiences' do
+    before do
+      TokenValidator::ValidatorConfig.additional_issuers = [auth0_entry.merge(audience: [entry_audience, orders_api])]
+      stub_token_endpoint
+    end
+
+    it 'refuses a call that names no audience, without asking for a token' do
+      expect(service.access_token(auth0_issuer)).to be_nil
+      expect(service.oauth_auth_header(auth0_issuer)).to eq({})
+      expect(a_request(:post, //)).not_to have_been_made
+    end
+
+    it 'still asks for an audience the caller names' do
+      expect(token_for(billing_api)).to eq("token-for-#{billing_api}")
+    end
+  end
 end

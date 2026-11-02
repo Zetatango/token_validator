@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'active_support/core_ext/numeric/time'
 require 'json/jwt'
 require 'rails'
 
@@ -15,8 +16,8 @@ require 'rails'
 # it has always been.
 module TokenValidator::AdditionalIssuerSigningKeyHelper
   # How often a token naming a key id the cached set lacks may make this library fetch an issuer's
-  # keys again. The key id and the issuer both come from a token nobody has authenticated yet, so
-  # without a limit anyone could turn every request into a fetch.
+  # keys again. The key id and the issuer come from a token not yet verified, so the limit keeps an
+  # issuer's key fetches to this rate whatever key ids incoming tokens name.
   JWKS_REFETCH_COOLDOWN = 1.minute
 
   # Cached keys are fetched again once they are this old. When that fetch fails the cached set stays
@@ -48,22 +49,29 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   # Fetched again at most once per JWKS_REFETCH_COOLDOWN per issuer, across every process sharing the
   # cache; inside the cooldown the cached set is answered as it stands. A failed fetch answers nil and
   # leaves the cached set in place, so it can never cost valid tokens their keys.
+  #
+  # During a backoff nothing is fetched and the answer is nil, as it was for the fetch that failed.
+  # The refetch slot is left alone then, so a rotated key can be fetched as soon as the backoff ends.
   def refetched_additional_signing_key(entry)
     return download_additional_signing_key(entry) if Rails.cache.nil?
 
-    single_flight(jwks_cache_key(entry[:issuer_url])) do
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    single_flight(jwks_key) do
+      next nil if backing_off?(jwks_key)
+
       refetch_allowed?(entry) ? refresh_signing_key(entry) : cached_signing_key(entry)
     end
   end
 
   # One thread refreshes; the others carry on with the stale set rather than wait, since it still
-  # verifies every token signed by a key the issuer has not withdrawn.
+  # verifies every token signed by a key the issuer has not withdrawn. The thread that takes the lock
+  # looks again first, in case another finished a refresh after this one found the set stale.
   def refresh_stale_signing_key(entry, stale_keys)
     lock = flight_lock(jwks_cache_key(entry[:issuer_url]))
     return stale_keys unless lock.try_lock
 
     begin
-      refresh_signing_key(entry) || stale_keys
+      fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
     ensure
       lock.unlock
     end
@@ -85,19 +93,28 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     keys
   end
 
-  # +presence+, because a release before this one cached nil when a fetch failed.
+  # An empty set counts as nothing cached, so it is fetched again. This library never caches one, but
+  # an earlier release sharing the cache can, from a key set that listed no keys.
   def cached_signing_key(entry)
     Rails.cache.read(jwks_cache_key(entry[:issuer_url]), namespace:).presence
+  end
+
+  def fresh_signing_key(entry)
+    cached_signing_key(entry) if signing_key_fresh?(entry)
   end
 
   def signing_key_fresh?(entry)
     Rails.cache.exist?(jwks_fresh_key(entry), namespace:)
   end
 
-  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN. A cache that cannot record
-  # the slot answers no, which is the safe direction: the token is refused and the cached keys stand.
+  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in this process and in the
+  # cache shared with other processes. The process's own slot holds the limit when the cache keeps
+  # nothing. A cache that refuses the write answers no, which is the safe direction: the token is
+  # refused and the cached keys stand.
   def refetch_allowed?(entry)
-    Rails.cache.write(jwks_refetch_key(entry), true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+    marker = jwks_refetch_key(entry)
+    mark_in_process_unless_marked(marker, JWKS_REFETCH_COOLDOWN) &&
+      Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
   end
 
   def download_additional_signing_key(entry)

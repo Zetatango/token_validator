@@ -32,8 +32,8 @@ RSpec.describe TokenValidator::OauthTokenService do
     allow(Rails).to receive_messages(cache:, application: TokenValidatorTokenFetchSpec::Application.new)
   end
 
-  def token_body(value = 'auth0-token')
-    { access_token: value, expires_in: 86_400 }.to_json
+  def token_body(value = 'auth0-token', expires_in: 86_400)
+    { access_token: value, expires_in: }.to_json
   end
 
   def token_for(audience)
@@ -46,6 +46,12 @@ RSpec.describe TokenValidator::OauthTokenService do
 
   def log_lines
     @log_lines ||= StringIO.new
+  end
+
+  # A cache that keeps nothing, as a null store does and as Rails' Redis store does while Redis is
+  # unreachable.
+  def with_a_cache_that_keeps_nothing
+    allow(Rails).to receive_messages(cache: ActiveSupport::Cache::NullStore.new, application: TokenValidatorTokenFetchSpec::Application.new)
   end
 
   before do
@@ -80,14 +86,19 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
-  # Every way the fetch can fail answers nil -- and an empty header -- rather than raising into the
-  # caller. Each of these escaped as an exception, or produced an empty bearer token, before.
+  # Each of these failures answers nil -- and an empty header -- rather than raising into the caller.
   describe 'a failed fetch' do
     {
       'a DNS failure' => ->(stub) { stub.to_raise(SocketError) },
       'a connection reset' => ->(stub) { stub.to_raise(Errno::ECONNRESET) },
       'an unreachable host' => ->(stub) { stub.to_raise(Errno::EHOSTUNREACH) },
       'a TLS failure' => ->(stub) { stub.to_raise(OpenSSL::SSL::SSLError) },
+      'another OpenSSL failure' => ->(stub) { stub.to_raise(OpenSSL::OpenSSLError) },
+      'an HTTP protocol error' => ->(stub) { stub.to_raise(Net::ProtocolError) },
+      'a malformed response' => ->(stub) { stub.to_raise(Net::HTTPBadResponse) },
+      'a malformed response header' => ->(stub) { stub.to_raise(Net::HTTPHeaderSyntaxError) },
+      'a corrupt compressed body' => ->(stub) { stub.to_raise(Zlib::DataError) },
+      'a truncated compressed body' => ->(stub) { stub.to_raise(Zlib::BufError) },
       'a broken stream' => ->(stub) { stub.to_raise(IOError) },
       'a timeout' => lambda(&:to_timeout),
       'a refusal' => ->(stub) { stub.to_return(status: 401) },
@@ -98,7 +109,9 @@ RSpec.describe TokenValidator::OauthTokenService do
       'a body with no access_token' => ->(stub) { stub.to_return(status: 200, body: { expires_in: 86_400 }.to_json) },
       'a body with an empty access_token' => ->(stub) { stub.to_return(status: 200, body: token_body('')) },
       'a body with no expires_in' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't' }.to_json) },
-      'a body whose expires_in is not a number' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't', expires_in: '86400' }.to_json) }
+      'a body whose expires_in is not a number' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't', expires_in: '86400' }.to_json) },
+      'a token that lives only the three minutes held back' => ->(stub) { stub.to_return(status: 200, body: token_body(expires_in: 180)) },
+      'a token with no lifetime left' => ->(stub) { stub.to_return(status: 200, body: token_body(expires_in: 0)) }
     }.each do |failure, respond|
       it "answers nil, and an empty header, for #{failure}" do
         instance_exec(stub_request(:post, auth0_token_url), &respond)
@@ -134,6 +147,60 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  # A token is handed out until three minutes before it expires, so one that lives no longer than that
+  # could never be handed out. It is refused as unusable, and never cached.
+  describe 'a token that lives three minutes or less' do
+    before { with_cache }
+
+    around do |example|
+      raise_on_invalid_expiry = ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time
+      example.run
+    ensure
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = raise_on_invalid_expiry
+    end
+
+    it 'is refused at exactly three minutes, and nothing is cached' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 180))
+
+      expect(token_for(orders_api)).to be_nil
+      expect(cache.read(service.send(:access_token_cache_key, auth0_issuer, orders_api), namespace: service.send(:namespace))).to be_nil
+    end
+
+    it 'is accepted, and cached, at one second over' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 181))
+
+      2.times { expect(token_for(orders_api)).to include(token: 'auth0-token', expires_in: 181) }
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'logs that the lifetime is too short, naming the issuer and the audience' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+
+      token_for(orders_api)
+
+      expect(log_lines.string)
+        .to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: the token lifetime is too short to use: 180 s or less")
+    end
+
+    it 'does not raise when the cache refuses a negative expiry' do
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = true
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+
+      expect(token_for(orders_api)).to be_nil
+    end
+
+    it 'is not handed out thirty days later by a cache that ignores a negative expiry' do
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = false
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+      token_for(orders_api)
+
+      Timecop.travel(Time.now + 30.days)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.twice
+    end
+  end
+
   describe 'after a failure' do
     before { with_cache }
 
@@ -145,12 +212,33 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(requests_for(orders_api)).to have_been_made.once
     end
 
-    it 'asks again once the backoff has passed' do
+    it 'asks again once the backoff has passed, and not before' do
       stub_request(:post, auth0_token_url).to_return({ status: 503 }, { status: 200, body: token_body })
       token_for(orders_api)
 
-      Timecop.travel(Time.now + 11.seconds)
+      Timecop.travel(Time.now + 9.seconds)
+      expect(token_for(orders_api)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
+      expect(token_for(orders_api)).to include(token: 'auth0-token')
+    end
 
+    it 'is held back by a failure another process recorded in the cache' do
+      stub_request(:post, auth0_token_url).to_return(status: 503)
+      token_for(orders_api)
+      service.send(:forget_process_markers)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'still holds this process back when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
+      stub_request(:post, auth0_token_url).to_return({ status: 503 }, { status: 200, body: token_body })
+      token_for(orders_api)
+
+      Timecop.travel(Time.now + 9.seconds)
+      expect(token_for(orders_api)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
       expect(token_for(orders_api)).to include(token: 'auth0-token')
     end
 
@@ -208,7 +296,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
     def concurrent_pair(first_audience, second_audience)
       first = Thread.new { token_for(first_audience) }
-      arrived.pop
+      arrived.pop(timeout: 2)
       second = Thread.new { token_for(second_audience) }
       wait_until_waiting(second)
       [first, second]
@@ -225,6 +313,17 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
 
     it 'gives a caller that waited on a failed fetch nil, without a request of its own' do
+      hold_token_endpoint(503)
+      threads = concurrent_pair(orders_api, orders_api)
+
+      2.times { release << :go }
+
+      expect(threads.map(&:value)).to eq([nil, nil])
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'gives a caller that waited on a failed fetch nil, without a request of its own, when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
       hold_token_endpoint(503)
       threads = concurrent_pair(orders_api, orders_api)
 

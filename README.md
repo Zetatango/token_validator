@@ -50,6 +50,7 @@ TokenValidator::ValidatorConfig.configure(
   when it is configured rather than when a token arrives.
 - An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
   asked for one, rather than falling back to the primary issuer's credentials.
+- `audience` may be a list. A token naming any one of its members verifies.
 - A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
   it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
   configuration it cannot trust. The exception names the offending position and key but **not the
@@ -74,8 +75,9 @@ service.oauth_auth_header(ENV['auth0_issuer_url'], audience: ENV['orders_api_aud
 ```
 
 - Each token is cached under the issuer and the audience, and is handed out until three minutes
-  before it expires.
-- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before.
+  before it expires. A token that lives three minutes or less is refused, and the log says why.
+- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before. An entry
+  whose `audience` is a list answers `nil` instead and requests nothing: name the one you want.
 - Passing `nil`, a blank or non-String value, or any audience for the primary issuer answers `nil`
   (an empty header) and requests nothing. Check the setting before calling if a missing one should
   be reported.
@@ -87,16 +89,28 @@ unchanged.
 
 - **Timeouts:** 5 s to connect and 10 s to read.
 - **Failures** answer no token, or a refused token for verification, and are logged without anything
-  from the response. They never raise.
-- **Backoff:** after a failed fetch the same thing is not asked for again for 10 s.
+  from the response.
+- **Backoff:** after a failed fetch the same thing is not asked for again for 10 s. Each process
+  also remembers its own failures, so this holds even when the cache keeps nothing.
+  `TokenService.clear` forgets them, which a test suite stubbing failures should call between
+  examples.
 - **Unknown key ids:** an issuer's keys are fetched again for one at most once a minute, and the
-  fetched set replaces the cached one only when the fetch succeeded.
+  fetched set replaces the cached one only when the fetch succeeded. `TokenService` does this for
+  you. A consumer verifying tokens itself should call
+  `OauthTokenService.instance.refetch_signing_key(issuer)` for a token naming a key id it cannot find:
+  it answers the set to search, or `nil` when there is none.
 - **Key expiry:** cached keys are refreshed hourly. If the refresh fails they stay in use for up to a
   day.
 - **One fetch at a time:** within a process, callers that miss the cache together share one fetch.
 
 The backoff, the refetch limit, the expiry and the single fetch need `Rails.cache`. With none
 configured, every call fetches.
+
+- **A store that keeps nothing**, such as `ActiveSupport::Cache::NullStore`, caches no token and no
+  key set, so every call fetches, one at a time per process for the same token or key set. The
+  backoff and the refetch limit still hold within each process.
+- **A store that refuses writes**, as Rails' Redis store does while Redis is unreachable, behaves the
+  same way, except that no key set is fetched again for an unknown key id: such a token is refused.
 
 ## Installation
 

@@ -6,6 +6,7 @@ require 'rest-client'
 class TokenValidator::OauthTokenService
   include Singleton
   include TokenValidator::TokenCacheHelper
+  include TokenValidator::ProcessMarkerHelper
   include TokenValidator::AdditionalIssuerFetchHelper
   include TokenValidator::AdditionalIssuerSigningKeyHelper
 
@@ -49,6 +50,7 @@ class TokenValidator::OauthTokenService
 
   def clear
     clear_cache_if_available
+    forget_process_markers
     @access_token = nil
   end
 

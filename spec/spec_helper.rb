@@ -80,6 +80,10 @@ RSpec.configure do |config|
   #   #   - http://www.teaisaweso.me/blog/2013/05/27/rspecs-new-message-expectation-syntax/
   #   #   - http://rspec.info/blog/2014/05/notable-changes-in-rspec-3/#zero-monkey-patching-mode
   config.disable_monkey_patching!
+
+  # OauthTokenService is a process-wide singleton that remembers recent fetch failures, so every
+  # example starts from a cleared one rather than inheriting another example's backoff.
+  config.before { TokenValidator::OauthTokenService.instance.clear }
   #
   #   # Many RSpec users commonly either run the entire suite or an individual
   #   # file, and it's useful to allow more verbose output when running an

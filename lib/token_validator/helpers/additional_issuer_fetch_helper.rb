@@ -1,15 +1,17 @@
 # frozen_string_literal: true
 
+require 'active_support/core_ext/numeric/time'
 require 'rails'
 require 'rest-client'
+require 'zlib'
 
 # How machine tokens are obtained from an additional issuer: any trusted issuer other than the
 # primary one. Also the fetching machinery AdditionalIssuerSigningKeyHelper uses for that issuer's
 # keys.
 #
-# Every fetch has explicit timeouts, and every way it can fail answers nil rather than raising. After
-# a failure the same thing is not asked for again for a short while, and within one process only one
-# thread fetches a given thing at a time.
+# Every fetch has explicit timeouts, and each failure in FETCH_FAILURES answers nil rather than
+# raising. After a failure the same thing is not asked for again for a short while, and within one
+# process only one thread fetches a given thing at a time.
 #
 # Kept apart from the primary issuer's path in TokenCacheHelper, which decides which of the two a
 # request takes. The primary path stays exactly as it has always behaved, failures included, so
@@ -29,10 +31,11 @@ module TokenValidator::AdditionalIssuerFetchHelper
   class UnusableResponse < StandardError; end
 
   # Every way a fetch is known to fail. The HTTP client wraps HTTP errors and timeouts in its own
-  # exceptions, but lets DNS failures, connection resets, TLS errors and broken streams through as
-  # they are.
+  # exceptions, but lets DNS failures, connection resets, TLS and other OpenSSL errors, malformed
+  # responses, compressed bodies that cannot be decompressed and broken streams through as they are.
   FETCH_FAILURES = [
-    RestClient::Exception, SocketError, SystemCallError, OpenSSL::SSL::SSLError, IOError, JSON::ParserError, UnusableResponse
+    RestClient::Exception, SocketError, SystemCallError, OpenSSL::OpenSSLError, IOError, Net::ProtocolError,
+    Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Zlib::Error, JSON::ParserError, UnusableResponse
   ].freeze
 
   FAILED_FETCH_KEY = 'failed-fetch'
@@ -44,7 +47,7 @@ module TokenValidator::AdditionalIssuerFetchHelper
 
   # +audience+ is the API the caller named, or ENTRY_AUDIENCE for the one the entry carries.
   def additional_issuer_access_token(entry, audience)
-    return nil unless entry_audience?(audience) || requestable_audience?(audience)
+    return nil unless entry_audience?(audience) ? single_entry_audience?(entry) : requestable_audience?(audience)
     return request_additional_access_token(entry, audience) if Rails.cache.nil?
 
     cache_key = access_token_cache_key(entry[:issuer_url], audience)
@@ -79,8 +82,15 @@ module TokenValidator::AdditionalIssuerFetchHelper
     expires_in = response['expires_in']
     raise UnusableResponse, 'the token response has no access_token' unless token.is_a?(String) && !token.empty?
     raise UnusableResponse, 'the token response has no numeric expires_in' unless expires_in.is_a?(Numeric)
+    raise UnusableResponse, 'the token lifetime is too short to use: 180 s or less' unless usable_lifetime?(expires_in)
 
     { token:, expires: Time.now.to_i + expires_in, expires_in: }
+  end
+
+  # A token is cached, and handed out, until ACCESS_TOKEN_EXPIRY_MARGIN before it expires. One that
+  # lives no longer than that could never be handed out, and its cache expiry would not be positive.
+  def usable_lifetime?(expires_in)
+    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN
   end
 
   def fetch_json_object(method, url, payload = nil)
@@ -113,13 +123,24 @@ module TokenValidator::AdditionalIssuerFetchHelper
     audience.is_a?(String) && !audience.strip.empty?
   end
 
+  # An entry may list several audiences, so that tokens naming any of them verify. A token is asked
+  # for one API only, so a caller of such an entry must name the one it wants.
+  def single_entry_audience?(entry)
+    !entry[:audience].is_a?(Array)
+  end
+
   # Shared through the cache, so one process's failure holds back every process for the backoff.
+  # The process's own copy holds it within the process -- and lets threads waiting on a fetch that
+  # failed share its answer -- when the cache keeps nothing.
   def backing_off?(cache_key)
-    Rails.cache.exist?(failed_fetch_key(cache_key), namespace:)
+    marker = failed_fetch_key(cache_key)
+    marked_in_process?(marker) || Rails.cache.exist?(marker, namespace:)
   end
 
   def back_off(cache_key)
-    Rails.cache.write(failed_fetch_key(cache_key), true, namespace:, expires_in: FAILED_FETCH_BACKOFF)
+    marker = failed_fetch_key(cache_key)
+    mark_in_process(marker, FAILED_FETCH_BACKOFF)
+    Rails.cache.write(marker, true, namespace:, expires_in: FAILED_FETCH_BACKOFF)
   end
 
   def failed_fetch_key(cache_key)

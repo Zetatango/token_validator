@@ -178,31 +178,80 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
-  # Whether the process may also keep serving its own copy after the shared cache has lost the entry
-  # is not settled, so these examples are skipped until it is; they encode the cache staying the
-  # only store whenever it works.
-  describe 'a cache that works' do
-    before { use_cache }
-
-    it 'stays the only place a token is kept: a token removed from it is requested again',
-       skip: 'waiting for a ruling on whether a process keeps its own copy when the cache works' do
-      stub_token_endpoint_echoing_audience
-      token_for(orders_api)
-
-      cache.clear
-      token_for(orders_api)
-
-      expect(token_requests(orders_api)).to have_been_made.twice
+  # The process's own copy is consulted whenever the shared cache has no entry, not only when the
+  # cache is unable to keep anything: flushing, evicting or clearing the shared cache does not make
+  # this process fetch again at once. A token lasts until three minutes before it expires and a key
+  # set until it is an hour old; TokenService.clear in a process forgets that process's copies.
+  describe 'a cache that works, once what it held has been removed' do
+    before do
+      use_cache
+      Timecop.freeze(start)
     end
 
-    it 'stays the only place a key set is kept: a set removed from it is fetched again',
-       skip: 'waiting for a ruling on whether a process keeps its own copy when the cache works' do
-      stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'))
-      extra_keys
+    describe 'a machine token' do
+      before do
+        stub_token_endpoint_echoing_audience(expires_in: 3600)
+        token_for(orders_api)
+        cache.clear
+      end
 
-      cache.clear
+      it 'is still reused with no request, until three minutes before it expires, and not a moment longer' do
+        at(1) { expect(token_for(orders_api)).to include(token: "token-for-#{orders_api}") }
+        at(3420 - just) { token_for(orders_api) }
+        expect(token_requests(orders_api)).to have_been_made.once
 
-      expect(kids_of(extra_keys)).to eq(['b'])
+        at(3420 + just) { token_for(orders_api) }
+        expect(token_requests(orders_api)).to have_been_made.twice
+      end
+
+      it 'is not reused once TokenService.clear has been called in the process' do
+        TokenValidator::TokenService.clear
+
+        token_for(orders_api)
+
+        expect(token_requests(orders_api)).to have_been_made.twice
+      end
+
+      it 'gives way to the shared cache whenever that holds a token' do
+        other = { token: 'fetched-by-another-process', expires: start.to_i + 3600, expires_in: 3600 }
+        cache.write(service.send(:access_token_cache_key, AdditionalIssuerContext::EXTRA_ISSUER, orders_api), other,
+                    namespace: service.send(:namespace), expires_in: 3000)
+
+        expect(token_for(orders_api)).to include(token: 'fetched-by-another-process')
+        expect(token_requests(orders_api)).to have_been_made.once
+      end
+    end
+
+    describe 'a signing key set' do
+      before do
+        stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'))
+        extra_keys
+        cache.clear
+      end
+
+      it 'is still reused with no request, until it is an hour old, and not a moment longer' do
+        at(1) { expect(kids_of(extra_keys)).to eq(['a']) }
+        at(1.hour - just) { expect(kids_of(extra_keys)).to eq(['a']) }
+        expect(key_requests).to have_been_made.once
+
+        at(1.hour + just) { expect(kids_of(extra_keys)).to eq(['b']) }
+        expect(key_requests).to have_been_made.twice
+      end
+
+      it 'is not reused once TokenService.clear has been called in the process' do
+        TokenValidator::TokenService.clear
+
+        expect(kids_of(extra_keys)).to eq(['b'])
+        expect(key_requests).to have_been_made.twice
+      end
+
+      it 'gives way to the shared cache whenever that holds a set' do
+        cache.write(service.send(:jwks_cache_key, AdditionalIssuerContext::EXTRA_ISSUER), JSON::JWK::Set.new([jwk('fetched-by-another-process')]),
+                    namespace: service.send(:namespace), expires_in: 1.day)
+
+        expect(kids_of(extra_keys)).to eq(['fetched-by-another-process'])
+        expect(key_requests).to have_been_made.once
+      end
     end
   end
 end

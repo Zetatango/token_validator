@@ -8,9 +8,9 @@ require 'rest-client'
 # primary one. Also the fetching machinery AdditionalIssuerSigningKeyHelper uses for that issuer's
 # keys.
 #
-# Every fetch has explicit timeouts, and every way it can fail answers nil rather than raising. After
-# a failure the same thing is not asked for again for a short while, and within one process only one
-# thread fetches a given thing at a time.
+# Every fetch has explicit timeouts, and each failure in FETCH_FAILURES answers nil rather than
+# raising. After a failure the same thing is not asked for again for a short while, and within one
+# process only one thread fetches a given thing at a time.
 #
 # Kept apart from the primary issuer's path in TokenCacheHelper, which decides which of the two a
 # request takes. The primary path stays exactly as it has always behaved, failures included, so
@@ -30,10 +30,11 @@ module TokenValidator::AdditionalIssuerFetchHelper
   class UnusableResponse < StandardError; end
 
   # Every way a fetch is known to fail. The HTTP client wraps HTTP errors and timeouts in its own
-  # exceptions, but lets DNS failures, connection resets, TLS errors and broken streams through as
-  # they are.
+  # exceptions, but lets DNS failures, connection resets, TLS and other OpenSSL errors, malformed
+  # responses and broken streams through as they are.
   FETCH_FAILURES = [
-    RestClient::Exception, SocketError, SystemCallError, OpenSSL::SSL::SSLError, IOError, JSON::ParserError, UnusableResponse
+    RestClient::Exception, SocketError, SystemCallError, OpenSSL::OpenSSLError, IOError, Net::ProtocolError,
+    Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, JSON::ParserError, UnusableResponse
   ].freeze
 
   FAILED_FETCH_KEY = 'failed-fetch'

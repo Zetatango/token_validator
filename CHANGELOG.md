@@ -11,9 +11,9 @@ gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 
 One machine token per receiving API, and timeouts, backoff and clean failures when fetching an
 additional issuer's signing keys and machine tokens. **The primary issuer is unchanged, failures
-included**, and a caller that names no audience sends, caches and receives exactly what it did.
-`bin/parity_check` against v0.8.0 is identical across all 30 scenarios: the existing 28, plus 2 new ones for an additional issuer's
-machine token asked for without an audience.
+included.** An additional issuer asked for a machine token without an audience sends the same
+request and caches the token under the same key as before. `bin/parity_check` against v0.8.0 is
+identical across all 30 scenarios: the existing 28, plus 2 new ones for that call.
 
 A consumer that trusts only the primary issuer sees no change at all. One that also trusts an
 additional issuer sees the changes below on that issuer's path only.

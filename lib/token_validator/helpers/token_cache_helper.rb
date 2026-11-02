@@ -10,17 +10,32 @@ module TokenValidator::TokenCacheHelper
   ISSUER_JWKS_KEY = 'issuer-jwks'
   ACCESS_TOKEN = 'access-token'
 
+  # How long before its real expiry a cached machine token stops being handed out, so a caller is
+  # never given one that lapses on its way to the receiving service.
+  ACCESS_TOKEN_EXPIRY_MARGIN = 3.minutes
+
+  # The default for +audience:+ on the machine-token calls, meaning "the audience the issuer entry
+  # names". A sentinel rather than nil, so that only a caller who leaves the keyword out gets that
+  # audience. A caller passing nil -- typically a setting that was never configured -- is asking for
+  # an audience it does not have, and is given no token rather than one for a different API.
+  ENTRY_AUDIENCE = Object.new.freeze
+
   # A machine token for +issuer+, or for the primary issuer when none is given.
   #
-  # Cached per issuer for the same reason the signing keys are: a caller must never be handed a
-  # token minted for a different issuer's audience.
-  def fetch_access_token(issuer = nil)
+  # +audience+ names the API the token is to be accepted by. Omitted, it is the one the issuer entry
+  # carries, which is the only token there was before a caller could choose. Only an additional
+  # issuer can be asked for a particular audience. The primary issuer is never sent one, so asking it
+  # for one answers nil rather than a token for some other API.
+  #
+  # THE TWO KINDS OF ISSUER ARE FETCHED FROM SEPARATELY. The primary issuer's path, here, is the one
+  # this library has always had. Every other issuer goes through AdditionalIssuerFetchHelper.
+  def fetch_access_token(issuer = nil, audience: ENTRY_AUDIENCE)
     entry = issuer_entry_for(issuer)
     return nil if entry.nil? || !machine_token_credentials?(entry)
+    return additional_issuer_access_token(entry, audience) unless primary_issuer?(entry)
+    return nil unless entry_audience?(audience)
 
-    cache_key = access_token_cache_key(entry[:issuer_url])
-    token = Rails.cache&.read(cache_key, namespace:)
-    token = request_access_token(entry, cache_key) if token.nil?
+    token = primary_access_token(entry)
 
     # Scratch state on a Singleton, so only the primary issuer touches it. Letting an additional
     # issuer write here would be precisely the shared mutable state per-issuer isolation forbids.
@@ -78,10 +93,18 @@ module TokenValidator::TokenCacheHelper
     nil
   end
 
-  def request_access_token(entry, cache_key)
+  # The primary issuer's machine token, from the cache or else requested.
+  def primary_access_token(entry)
+    cache_key = access_token_cache_key(entry[:issuer_url])
+
+    Rails.cache&.read(cache_key, namespace:) || request_access_token(cache_key)
+  end
+
+  # Posts to the exact endpoint the primary issuer has always used, double slash and all.
+  def request_access_token(cache_key)
     # Parsed once. The previous version parsed the same body three times, and guarded a literal
     # hash against being nil; both are dropped here without any change in behaviour.
-    response = JSON.parse(RestClient.post(token_endpoint_for(entry), access_token_params(entry)))
+    response = JSON.parse(RestClient.post(oauth_path(:token), primary_access_token_params))
 
     access_token = {
       token: response['access_token'],
@@ -89,16 +112,15 @@ module TokenValidator::TokenCacheHelper
       expires_in: response['expires_in']
     }
 
-    Rails.cache&.write(
-      cache_key,
-      access_token,
-      namespace:,
-      expires_in: access_token[:expires_in] - 3.minutes
-    )
+    store_access_token(cache_key, access_token)
 
     access_token
   rescue Errno::ECONNREFUSED, RestClient::Exception
     nil
+  end
+
+  def store_access_token(cache_key, access_token)
+    Rails.cache&.write(cache_key, access_token, namespace:, expires_in: access_token[:expires_in] - ACCESS_TOKEN_EXPIRY_MARGIN)
   end
 
   def oauth_path(action)
@@ -106,27 +128,6 @@ module TokenValidator::TokenCacheHelper
   end
 
   private
-
-  # The primary issuer keeps the exact endpoint it has always used, double slash and all. Only an
-  # additional issuer resolves through its entry.
-  def token_endpoint_for(entry)
-    return oauth_path(:token) if primary_issuer?(entry)
-
-    # Auth0 publishes its token endpoint at <domain>/oauth/token. +token_url+ overrides that for
-    # anything non-standard.
-    entry[:token_url].presence || "#{entry[:issuer_url].chomp('/')}/oauth/token"
-  end
-
-  def access_token_params(entry)
-    return primary_access_token_params if primary_issuer?(entry)
-
-    # Auth0 requires +audience+ on a client-credentials grant. Without it the token comes back for
-    # the tenant's own management API rather than for ours.
-    { grant_type: :client_credentials,
-      client_id: entry[:client_id],
-      client_secret: entry[:client_secret],
-      audience: entry[:audience] }
-  end
 
   # Byte-identical to what this library has always sent, including the absence of +audience+.
   def primary_access_token_params
@@ -149,6 +150,11 @@ module TokenValidator::TokenCacheHelper
     entry[:issuer_url] == TokenValidator::ValidatorConfig.config[:issuer_url]
   end
 
+  # Whether a caller left +audience:+ out, and so wants the audience the issuer entry carries.
+  def entry_audience?(audience)
+    audience.equal?(ENTRY_AUDIENCE)
+  end
+
   # An omitted issuer means the primary one, which is what every caller wanted before this library
   # knew about more than one.
   #
@@ -167,8 +173,14 @@ module TokenValidator::TokenCacheHelper
     issuer_scoped_key(ISSUER_JWKS_KEY, issuer_url)
   end
 
-  def access_token_cache_key(issuer_url)
-    issuer_scoped_key(ACCESS_TOKEN, issuer_url)
+  # A token asked for by audience is held apart from the entry's own, and from every other
+  # audience's. The key for the entry's own audience is the one it has always been, so processes
+  # still running an earlier release share it.
+  def access_token_cache_key(issuer_url, audience = ENTRY_AUDIENCE)
+    key = issuer_scoped_key(ACCESS_TOKEN, issuer_url)
+    return key if entry_audience?(audience)
+
+    "#{key}-#{Digest::SHA256.hexdigest(audience)}"
   end
 
   # Digested because an issuer URL is not safe to paste into a cache key, and because it keeps the

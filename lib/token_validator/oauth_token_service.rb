@@ -6,10 +6,15 @@ require 'rest-client'
 class TokenValidator::OauthTokenService
   include Singleton
   include TokenValidator::TokenCacheHelper
+  include TokenValidator::AdditionalIssuerFetchHelper
 
   # +issuer+ omitted means the primary issuer, so existing callers are unaffected.
-  def access_token(issuer = nil)
-    fetch_access_token(issuer)
+  #
+  # +audience+ asks an additional issuer for a token for that API, rather than the one its entry
+  # names. Omitted, the entry's audience is used. Passed but unusable -- nil, blank, not a String, or
+  # given for the primary issuer -- the answer is nil and nothing is requested.
+  def access_token(issuer = nil, audience: ENTRY_AUDIENCE)
+    fetch_access_token(issuer, audience:)
   end
 
   def basic_http_header(issuer = nil)
@@ -19,8 +24,8 @@ class TokenValidator::OauthTokenService
     {}
   end
 
-  def oauth_auth_header(issuer = nil)
-    token = access_token(issuer)
+  def oauth_auth_header(issuer = nil, audience: ENTRY_AUDIENCE)
+    token = access_token(issuer, audience:)
     return { authorization: "Bearer #{token[:token]}" } unless token.nil?
 
     {}

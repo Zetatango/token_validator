@@ -329,6 +329,16 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
     end
 
+    it 'takes no slot of its own while another process holds the minute, so it may fetch once that ends' do
+      service.refetch_signing_key(auth0_issuer)
+      service.send(:forget_process_markers)
+
+      Timecop.travel(Time.now + 59.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+      Timecop.travel(Time.now + 61.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
+    end
+
     it 'counts the minute per issuer' do
       stub_request(:get, other_jwks_url).to_return(key_set('c'))
       service.refetch_signing_key(auth0_issuer)

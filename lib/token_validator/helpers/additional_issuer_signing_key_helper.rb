@@ -107,14 +107,18 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     Rails.cache.exist?(jwks_fresh_key(entry), namespace:)
   end
 
-  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in this process and in the
-  # cache shared with other processes. The process's own slot holds the limit when the cache keeps
-  # nothing. A cache that refuses the write answers no, which is the safe direction: the token is
-  # refused and the cached keys stand.
+  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in the cache shared with
+  # other processes and then in this process. The process's own slot holds the limit when the cache
+  # keeps nothing. It is taken only once the shared slot is won, so a slot another process holds never
+  # keeps this one waiting past that slot's end. A cache that refuses the write answers no, which is
+  # the safe direction: the token is refused and the cached keys stand.
   def refetch_allowed?(entry)
     marker = jwks_refetch_key(entry)
-    mark_in_process_unless_marked(marker, JWKS_REFETCH_COOLDOWN) &&
-      Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+    return false if marked_in_process?(marker)
+    return false unless Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+
+    mark_in_process(marker, JWKS_REFETCH_COOLDOWN)
+    true
   end
 
   def download_additional_signing_key(entry)

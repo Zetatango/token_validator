@@ -18,16 +18,6 @@ module TokenValidator::ProcessMarkerHelper
     PROCESS_MARKERS_GUARD.synchronize { process_markers[marker] = Time.now + duration }
   end
 
-  # Sets +marker+ for +duration+ unless it is set already, and answers whether it did.
-  def mark_in_process_unless_marked(marker, duration)
-    PROCESS_MARKERS_GUARD.synchronize do
-      next false if process_marker_live?(marker)
-
-      process_markers[marker] = Time.now + duration
-      true
-    end
-  end
-
   def forget_process_markers
     PROCESS_MARKERS_GUARD.synchronize { process_markers.clear }
   end

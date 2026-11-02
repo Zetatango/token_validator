@@ -393,6 +393,31 @@ RSpec.describe TokenValidator::OauthTokenService do
   # Callers that miss the cache at the same moment wait for one fetch rather than each making their
   # own. The first caller is held inside the token endpoint until the second is seen to be waiting,
   # so the second really does arrive while the first fetch is in flight.
+  # Each process also keeps its own copy of the last token it fetched, for when the cache keeps
+  # nothing. The cache's token comes first, so one another process fetched since is the one used.
+  describe 'this process\'s copy of the token' do
+    before { with_cache }
+
+    def cache_key = service.send(:access_token_cache_key, auth0_issuer, orders_api)
+
+    it 'is handed out, without a request, when the cache no longer holds the token' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body('kept'))
+      token_for(orders_api)
+      cache.delete(cache_key, namespace: service.send(:namespace))
+
+      expect(token_for(orders_api)).to include(token: 'kept')
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'gives way to a token another process has since put in the cache' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body('kept'))
+      token_for(orders_api)
+      cache.write(cache_key, { token: 'newer', expires: Time.now.to_i + 86_400, expires_in: 86_400 }, namespace: service.send(:namespace))
+
+      expect(token_for(orders_api)).to include(token: 'newer')
+    end
+  end
+
   describe 'concurrent callers in one process' do
     let(:arrived) { Queue.new }
     let(:release) { Queue.new }

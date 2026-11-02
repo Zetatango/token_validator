@@ -76,14 +76,18 @@ additional issuer sees the changes below on that issuer's path only.
   processes running an earlier release that share the cache during a rolling deploy can still read
   it.
 - **One fetch at a time.** Within one process, callers that miss the cache together wait for one
-  fetch of that token, or of that issuer's keys, instead of each making their own. A different
-  audience or issuer is never held up. While a stale key set is being refreshed, other callers keep
-  using it rather than wait.
+  fetch of that token, or of that issuer's keys, instead of each making their own, and then use what
+  it fetched. A different audience or issuer is never held up. While a stale key set is being
+  refreshed, other callers keep using it rather than wait.
+- **A copy in each process.** Each process also keeps the last machine token and key set it fetched,
+  for as long as the cache would: a token until three minutes before it expires, a key set for up to
+  a day, refreshed hourly. The cache's copy is used first, so a token or key set another process
+  fetched since is the one used. `TokenService.clear` forgets this process's copies.
 
   The backoff, the refetch limit, the expiry and the single fetch all need a cache. With
   `Rails.cache` unset, every call fetches, as before. With a store that keeps nothing, such as a null
-  store, every call fetches one at a time per process, and the backoff and the refetch limit still
-  hold within each process.
+  store, or Redis while it is unreachable, each process works from its own copies: callers share one
+  fetch and reuse its result, and the backoff and the refetch limit still hold within each process.
 
 ### Failure handling — additional issuers only
 

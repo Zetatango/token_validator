@@ -94,19 +94,27 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     return nil if backing_off?(jwks_key)
 
     keys = download_additional_signing_key(entry)
-    if keys
-      Rails.cache.write(jwks_key, keys, namespace:, expires_in: SIGNING_KEY_MAX_AGE)
-      Rails.cache.write(jwks_fresh_key(entry), true, namespace:, expires_in: SIGNING_KEY_REFRESH_AFTER)
-    else
-      back_off(jwks_key)
-    end
+    keys ? keep_signing_key(entry, keys) : back_off(jwks_key)
     keys
   end
 
-  # An empty set counts as nothing cached, so it is fetched again. This library never caches one, but
-  # an earlier release sharing the cache can, from a key set that listed no keys.
+  # In the shared cache, and in this process for when the cache keeps nothing: the set for
+  # SIGNING_KEY_MAX_AGE, and the mark that it is fresh for SIGNING_KEY_REFRESH_AFTER.
+  def keep_signing_key(entry, keys)
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    Rails.cache.write(jwks_key, keys, namespace:, expires_in: SIGNING_KEY_MAX_AGE)
+    Rails.cache.write(jwks_fresh_key(entry), true, namespace:, expires_in: SIGNING_KEY_REFRESH_AFTER)
+    keep_in_process(jwks_key, keys, SIGNING_KEY_MAX_AGE)
+    mark_in_process(jwks_fresh_key(entry), SIGNING_KEY_REFRESH_AFTER)
+  end
+
+  # The shared cache's set, else this process's copy of the last one it fetched. The shared set comes
+  # first, so keys another process fetched after a rotation are found here too. An empty set counts
+  # as nothing cached, so it is fetched again. This library never caches one, but an earlier release
+  # sharing the cache can, from a key set that listed no keys.
   def cached_signing_key(entry)
-    Rails.cache.read(jwks_cache_key(entry[:issuer_url]), namespace:).presence
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    Rails.cache.read(jwks_key, namespace:).presence || kept_in_process(jwks_key)
   end
 
   def fresh_signing_key(entry)
@@ -114,7 +122,8 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   end
 
   def signing_key_fresh?(entry)
-    Rails.cache.exist?(jwks_fresh_key(entry), namespace:)
+    fresh_key = jwks_fresh_key(entry)
+    Rails.cache.exist?(fresh_key, namespace:) || marked_in_process?(fresh_key)
   end
 
   # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in the cache shared with

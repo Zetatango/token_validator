@@ -11,7 +11,8 @@ require 'zlib'
 #
 # Every fetch has explicit timeouts, and each failure in FETCH_FAILURES answers nil rather than
 # raising. After a failure the same thing is not asked for again for a short while, and within one
-# process only one thread fetches a given thing at a time.
+# process only one thread fetches a given thing at a time; the threads waiting on it reuse what it
+# fetched, from the cache or from this process's own copy.
 #
 # Kept apart from the primary issuer's path in TokenCacheHelper, which decides which of the two a
 # request takes. The primary path stays exactly as it has always behaved, failures included, so
@@ -66,16 +67,24 @@ module TokenValidator::AdditionalIssuerFetchHelper
     end
   end
 
+  # The shared cache's token, else this process's copy of the last one it fetched.
   def cached_access_token(cache_key)
-    Rails.cache.read(cache_key, namespace:)
+    Rails.cache.read(cache_key, namespace:) || kept_in_process(cache_key)
   end
 
   def obtain_access_token(entry, audience, cache_key)
     return nil if backing_off?(cache_key)
 
     token = request_additional_access_token(entry, audience)
-    token.nil? ? back_off(cache_key) : store_access_token(cache_key, token)
+    token.nil? ? back_off(cache_key) : keep_access_token(cache_key, token)
     token
+  end
+
+  # In the shared cache, and in this process for when the cache keeps nothing, both until
+  # ACCESS_TOKEN_EXPIRY_MARGIN before the token expires.
+  def keep_access_token(cache_key, token)
+    store_access_token(cache_key, token)
+    keep_in_process(cache_key, token, token[:expires_in] - TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN)
   end
 
   def request_additional_access_token(entry, audience)
@@ -108,11 +117,9 @@ module TokenValidator::AdditionalIssuerFetchHelper
   end
 
   def fetch_json_object(method, url, payload = nil)
-    response = JSON.parse(
-      RestClient::Request.execute(
-        method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT, max_redirects: FETCH_MAX_REDIRECTS
-      )
-    )
+    body = RestClient::Request.execute(method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT,
+                                       max_redirects: FETCH_MAX_REDIRECTS)
+    response = JSON.parse(body)
     raise UnusableResponse, 'the response is not a JSON object' unless response.is_a?(Hash)
 
     response

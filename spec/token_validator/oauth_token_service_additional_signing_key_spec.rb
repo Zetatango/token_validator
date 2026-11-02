@@ -244,9 +244,26 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
     end
 
-    it 'fetches again over an empty set an earlier release cached, even while the set counts as fresh' do
+    it 'answers a set another process has since put in the cache, ahead of the copy this process kept' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
+      service.signing_key(auth0_issuer)
+      cache.write(jwks_cache_key, JSON::JWK::Set.new([jwk('a'), jwk('b')]), namespace: service.send(:namespace))
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(%w[a b])
+    end
+
+    it 'never answers an empty set an earlier release cached, answering the last set this process fetched' do
       stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
       service.signing_key(auth0_issuer)
+      cache.write(jwks_cache_key, JSON::JWK::Set.new([]), namespace: service.send(:namespace))
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
+    end
+
+    it 'fetches again over an empty set an earlier release cached, in a process with no set of its own' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
+      service.signing_key(auth0_issuer)
+      service.send(:forget_process_markers)
       cache.write(jwks_cache_key, JSON::JWK::Set.new([]), namespace: service.send(:namespace))
 
       expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])

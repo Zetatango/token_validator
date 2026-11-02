@@ -86,8 +86,8 @@ additional issuer sees the changes below on that issuer's path only.
     client does not wrap in its own exceptions;
   - a key set that is not JSON, is a JSON value other than an object, has no list of keys, or holds
     no key that can verify a signature;
-  - a published key that cannot be turned into a verification key. It is left out of the set, so a
-    token naming it is refused like any unknown key;
+  - a published key that cannot be turned into a public verification key, a shared-secret key
+    included. It is left out of the set, so a token naming it is refused like any unknown key;
   - a token response that is not a JSON object, lacks a non-empty `access_token`, or lacks a
     finite numeric `expires_in`;
   - a token that lives 180 s or less. It could never be handed out, because a token is handed out

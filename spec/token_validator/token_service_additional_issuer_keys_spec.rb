@@ -53,6 +53,15 @@ RSpec.describe TokenValidator::TokenService do
       expect(validates?(auth0_token(kid: 'broken-kid'))).to be false
       expect(validates?(auth0_token)).to be true
     end
+
+    it 'refuses a token naming a shared-secret key, without raising, and still verifies the others' do
+      secret_key = { kty: 'oct', kid: 'secret-kid', k: Base64.urlsafe_encode64('s' * 32, padding: false) }
+      body = { keys: [secret_key, auth0_key.public_key.to_jwk(kid: auth0_kid, use: 'sig', alg: 'RS256')] }.to_json
+      stub_request(:get, auth0_jwks_url).to_return(status: 200, body:)
+
+      expect(validates?(auth0_token(kid: 'secret-kid'))).to be false
+      expect(validates?(auth0_token)).to be true
+    end
   end
 
   describe 'a token naming a key id the cached set lacks' do

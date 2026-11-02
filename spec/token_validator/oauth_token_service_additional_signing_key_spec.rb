@@ -101,7 +101,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       'keys that are not a list' => ->(stub) { stub.to_return(status: 200, body: '{"keys":"none"}') },
       'an empty list of keys' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[]}') },
       'keys that are not objects' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[1,"two",null]}') },
-      'keys none of which can verify' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"RSA","kid":"k"},{"kid":"j"}]}') }
+      'keys none of which can verify' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"RSA","kid":"k"},{"kid":"j"}]}') },
+      'only shared-secret keys' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"oct","kid":"k","k":"c2VjcmV0"}]}') }
     }.each do |failure, respond|
       it "answers no keys for #{failure}, with or without a cache" do
         instance_exec(stub_request(:get, auth0_jwks_url), &respond)
@@ -137,7 +138,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       'whose modulus is not a string' => { kty: 'RSA', kid: 'x', n: 5, e: 'AQAB' },
       'whose modulus is not base64' => { kty: 'RSA', kid: 'x', n: '!!!', e: 'AQAB' },
       'of no known type' => { kid: 'x' },
-      'whose point is not on its curve' => { kty: 'EC', kid: 'x', crv: 'P-256', x: 'AA', y: 'AA' }
+      'whose point is not on its curve' => { kty: 'EC', kid: 'x', crv: 'P-256', x: 'AA', y: 'AA' },
+      'that is a shared secret' => { kty: 'oct', kid: 'x', k: Base64.urlsafe_encode64('s' * 32, padding: false) }
     }.each do |shape, unusable_key|
       it "leaves out a key #{shape}, and keeps the rest" do
         stub_request(:get, auth0_jwks_url).to_return(status: 200, body: { keys: [unusable_key, jwk('a')] }.to_json)

@@ -125,7 +125,8 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   end
 
   # Keeps only the keys that can verify a signature. One published in a shape this library cannot
-  # use is left out, so a token naming it is refused like any unknown key rather than raising.
+  # use is left out, so a token naming it is refused like any unknown key rather than raising. That
+  # includes a shared-secret key, which converts to a string rather than to a public key.
   def key_set_from(response, entry)
     keys = response['keys']
     raise TokenValidator::AdditionalIssuerFetchHelper::UnusableResponse, 'the key set has no list of keys' unless keys.is_a?(Array)
@@ -140,8 +141,7 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   def usable_signing_key?(key)
     return false unless key.is_a?(Hash)
 
-    JSON::JWK.new(key).to_key
-    true
+    JSON::JWK.new(key).to_key.is_a?(OpenSSL::PKey::PKey)
   rescue *KEY_CONVERSION_FAILURES
     false
   end

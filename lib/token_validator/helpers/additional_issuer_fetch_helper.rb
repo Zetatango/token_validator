@@ -22,6 +22,10 @@ module TokenValidator::AdditionalIssuerFetchHelper
   FETCH_OPEN_TIMEOUT = 5
   FETCH_READ_TIMEOUT = 10
 
+  # Redirects are never followed: keys and tokens come only from the addresses the issuer entry
+  # names. A redirect answers as an HTTP error, one of FETCH_FAILURES.
+  FETCH_MAX_REDIRECTS = 0
+
   # After a failed fetch, how long the same thing -- one token, or one issuer's keys -- is not asked
   # for again. Calls in the meantime answer as the failed fetch did, rather than each waiting on an
   # endpoint that just failed.
@@ -96,7 +100,9 @@ module TokenValidator::AdditionalIssuerFetchHelper
 
   def fetch_json_object(method, url, payload = nil)
     response = JSON.parse(
-      RestClient::Request.execute(method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT)
+      RestClient::Request.execute(
+        method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT, max_redirects: FETCH_MAX_REDIRECTS
+      )
     )
     raise UnusableResponse, 'the response is not a JSON object' unless response.is_a?(Hash)
 

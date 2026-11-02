@@ -112,6 +112,16 @@ RSpec.describe TokenValidator::OauthTokenService do
       end
     end
 
+    [301, 302, 303, 307, 308].each do |status|
+      it "answers no keys for a #{status} redirect, and never follows it" do
+        stub_request(:get, auth0_jwks_url).to_return(status:, headers: { 'Location' => 'https://elsewhere.example.com/jwks.json' })
+        elsewhere = stub_request(:any, 'https://elsewhere.example.com/jwks.json').to_return(key_set('a'))
+
+        expect(service.signing_key(auth0_issuer)).to be_nil
+        expect(elsewhere).not_to have_been_requested
+      end
+    end
+
     it 'logs the issuer and the kind of failure, never the body' do
       stub_request(:get, auth0_jwks_url).to_return(status: 200, body: 'not json: auth0-secret')
 

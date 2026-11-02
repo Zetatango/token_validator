@@ -47,7 +47,9 @@ additional issuer sees the changes below on that issuer's path only.
 
 ### Changed — additional issuers only
 
-- **Timeouts.** Key and token fetches allow 5 s to connect and 10 s to read.
+- **Timeouts, and no redirects.** Key and token fetches allow 5 s to connect and 10 s to read, and
+  never follow a redirect: a redirect is a failed fetch, so keys and tokens come only from the
+  addresses the issuer entry names.
 - **Backoff.** After a failed fetch, that issuer's keys, or that issuer and audience's machine token,
   are not asked for again for 10 s. Calls in the meantime answer as the failure did. Shared through
   the cache, so it holds every process back. Each process also keeps its own record, so the backoff

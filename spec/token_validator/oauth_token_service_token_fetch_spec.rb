@@ -132,6 +132,16 @@ RSpec.describe TokenValidator::OauthTokenService do
       end
     end
 
+    [301, 302, 303, 307, 308].each do |status|
+      it "answers nil for a #{status} redirect, and never follows it" do
+        stub_request(:post, auth0_token_url).to_return(status:, headers: { 'Location' => 'https://elsewhere.example.com/token' })
+        elsewhere = stub_request(:any, 'https://elsewhere.example.com/token').to_return(status: 200, body: token_body)
+
+        expect(token_for(orders_api)).to be_nil
+        expect(elsewhere).not_to have_been_requested
+      end
+    end
+
     it 'logs the issuer, the audience and the kind of failure' do
       stub_request(:post, auth0_token_url).to_raise(SocketError)
 

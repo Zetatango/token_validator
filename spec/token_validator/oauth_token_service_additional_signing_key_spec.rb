@@ -48,6 +48,16 @@ RSpec.describe TokenValidator::OauthTokenService do
     @log_lines ||= StringIO.new
   end
 
+  def jwks_cache_key = "issuer-jwks-#{Digest::SHA256.hexdigest(auth0_issuer)}"
+
+  def auth0_entry = TokenValidator::ValidatorConfig.issuer_config_for(auth0_issuer)
+
+  # A cache that keeps nothing, as a null store does and as Rails' Redis store does while Redis is
+  # unreachable.
+  def with_a_cache_that_keeps_nothing
+    allow(Rails).to receive_messages(cache: ActiveSupport::Cache::NullStore.new, application: TokenValidatorSigningKeySpec::Application.new)
+  end
+
   before do
     TokenValidator::ValidatorConfig.configure(issuer_url: primary_issuer, audience: 'https://primary.example.com')
     TokenValidator::ValidatorConfig.additional_issuers = [entry_for(auth0_issuer, auth0_jwks_url), entry_for(other_issuer, other_jwks_url)]
@@ -182,6 +192,38 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
     end
 
+    it 'does not fetch again when another caller refreshed the set just before this one took the lock' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
+      service.signing_key(auth0_issuer)
+      Timecop.travel(Time.now + 61.minutes)
+      lock = service.send(:flight_lock, jwks_cache_key)
+      allow(lock).to receive(:try_lock).and_wrap_original do |try_lock|
+        service.send(:refresh_signing_key, auth0_entry)
+        try_lock.call
+      end
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+    end
+
+    it 'lets the next caller refresh after a refresh that raised an unexpected error' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
+      service.signing_key(auth0_issuer)
+      Timecop.travel(Time.now + 61.minutes)
+      stub_request(:get, auth0_jwks_url).to_raise(StandardError.new('unexpected')).then.to_return(key_set('b'))
+
+      expect { service.signing_key(auth0_issuer) }.to raise_error(StandardError, 'unexpected')
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
+    end
+
+    it 'fetches again over an empty set an earlier release cached, even while the set counts as fresh' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
+      service.signing_key(auth0_issuer)
+      cache.write(jwks_cache_key, JSON::JWK::Set.new([]), namespace: service.send(:namespace))
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
+    end
+
     it 'stops trusting the old set once it is a day old' do
       stub_request(:get, auth0_jwks_url).to_return(key_set('a'), { status: 503 })
       service.signing_key(auth0_issuer)
@@ -196,7 +238,29 @@ RSpec.describe TokenValidator::OauthTokenService do
       service.signing_key(auth0_issuer)
 
       expect(service.signing_key(auth0_issuer)).to be_nil
-      Timecop.travel(Time.now + 11.seconds)
+      Timecop.travel(Time.now + 9.seconds)
+      expect(service.signing_key(auth0_issuer)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
+    end
+
+    it 'is held back by a failure another process recorded in the cache' do
+      stub_request(:get, auth0_jwks_url).to_return({ status: 503 }, key_set('a'))
+      service.signing_key(auth0_issuer)
+      service.send(:forget_process_backoffs)
+
+      expect(service.signing_key(auth0_issuer)).to be_nil
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
+    end
+
+    it 'still holds this process back after a failed fetch when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
+      stub_request(:get, auth0_jwks_url).to_return({ status: 503 }, key_set('a'))
+      service.signing_key(auth0_issuer)
+
+      Timecop.travel(Time.now + 9.seconds)
+      expect(service.signing_key(auth0_issuer)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
       expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
     end
 
@@ -231,11 +295,12 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
     end
 
-    it 'may fetch again once the minute has passed' do
+    it 'may fetch again once the minute has passed, and not before' do
       service.refetch_signing_key(auth0_issuer)
 
+      Timecop.travel(Time.now + 59.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
       Timecop.travel(Time.now + 61.seconds) { service.refetch_signing_key(auth0_issuer) }
-
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
     end
 
@@ -300,10 +365,10 @@ RSpec.describe TokenValidator::OauthTokenService do
       sleep 0.01 until thread.status == 'sleep' || thread.status == false || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
     end
 
-    def while_one_fetch_is_in_flight
-      first = Thread.new { service.signing_key(auth0_issuer) }
-      arrived.pop
-      second = Thread.new { service.signing_key(auth0_issuer) }
+    def while_one_fetch_is_in_flight(call = :signing_key)
+      first = Thread.new { service.public_send(call, auth0_issuer) }
+      arrived.pop(timeout: 2)
+      second = Thread.new { service.public_send(call, auth0_issuer) }
       settle(second)
       [first, second]
     end
@@ -318,11 +383,37 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
     end
 
+    it 'gives a caller that waited on a failed fetch no keys, without a fetch of its own, when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
+      hold_key_endpoint({ status: 503 }, { status: 503 })
+      threads = while_one_fetch_is_in_flight
+
+      2.times { release << :go }
+
+      expect(threads.map(&:value)).to eq([nil, nil])
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
+    end
+
+    # The second caller needs the key the issuer just rotated in. It waits for the refetch in flight
+    # and finds the key in what that fetched, rather than being answered the old set at once.
+    it 'has a caller that arrives during a refetch wait for it, and answers the set it fetched' do
+      hold_key_endpoint(key_set('a'), key_set('a', 'b'))
+      release << :go
+      service.signing_key(auth0_issuer)
+      arrived.pop(timeout: 2)
+
+      threads = while_one_fetch_is_in_flight(:refetch_signing_key)
+      release << :go
+
+      expect(threads.map { |thread| kids(thread.value) }).to eq([%w[a b], %w[a b]])
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+    end
+
     it 'lets other callers carry on with a stale set while one refreshes it' do
       hold_key_endpoint(key_set('a'), key_set('b'))
       release << :go
       service.signing_key(auth0_issuer)
-      arrived.pop
+      arrived.pop(timeout: 2)
       Timecop.travel(Time.now + 61.minutes)
 
       first, second = while_one_fetch_is_in_flight

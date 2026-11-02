@@ -58,13 +58,14 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   end
 
   # One thread refreshes; the others carry on with the stale set rather than wait, since it still
-  # verifies every token signed by a key the issuer has not withdrawn.
+  # verifies every token signed by a key the issuer has not withdrawn. The thread that takes the lock
+  # looks again first, in case another finished a refresh after this one found the set stale.
   def refresh_stale_signing_key(entry, stale_keys)
     lock = flight_lock(jwks_cache_key(entry[:issuer_url]))
     return stale_keys unless lock.try_lock
 
     begin
-      refresh_signing_key(entry) || stale_keys
+      fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
     ensure
       lock.unlock
     end
@@ -86,9 +87,14 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     keys
   end
 
-  # +presence+, because a release before this one cached nil when a fetch failed.
+  # An empty set counts as nothing cached, so it is fetched again. This library never caches one, but
+  # an earlier release sharing the cache can, from a key set that listed no keys.
   def cached_signing_key(entry)
     Rails.cache.read(jwks_cache_key(entry[:issuer_url]), namespace:).presence
+  end
+
+  def fresh_signing_key(entry)
+    cached_signing_key(entry) if signing_key_fresh?(entry)
   end
 
   def signing_key_fresh?(entry)

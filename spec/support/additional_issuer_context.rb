@@ -18,6 +18,10 @@ module AdditionalIssuerContext
 
   MILLISECOND = 0.001
 
+  # Stands for an exception raised into a thread from outside, as a request timeout does. Not a
+  # StandardError, so nothing rescues it by accident.
+  class RequestCutShort < Exception; end # rubocop:disable Lint/InheritException
+
   SIGNING_KEYS = Hash.new { |keys, kid| keys[kid] = OpenSSL::PKey::RSA.new(2048) }
 
   # Cache whose writes always report failure and store nothing, as a cache store does when its

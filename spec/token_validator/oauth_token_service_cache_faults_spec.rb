@@ -253,6 +253,87 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  # A lifetime longer than the library believes a token can have is as unusable as one that is too
+  # short or not a number: the issuer's answer cannot be trusted to say when the token expires.
+  describe 'a token response whose lifetime is more than seven days' do
+    let(:started_at) { Time.at(1_800_000_000) }
+    let(:seven_days) { 604_800 }
+
+    around do |example|
+      original = ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time
+      example.run
+    ensure
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = original
+    end
+
+    before { Timecop.freeze(started_at) }
+
+    it 'is the longest lifetime the library names' do
+      expect(TokenValidator::AdditionalIssuerFetchHelper::ACCESS_TOKEN_MAX_LIFETIME).to eq(7.days)
+    end
+
+    excessive_lifetimes = [604_801, 604_800.5, 31_536_000, 1e20, 10**30, 1e308]
+
+    [true, false].each do |strict_cache|
+      excessive_lifetimes.each do |lifetime|
+        it "answers nil and an empty header, caches no token and never raises for #{lifetime} s, strict cache expiry #{strict_cache}" do
+          ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = strict_cache
+          use_cache
+          stub_request(:post, token_url).to_return(status: 200, body: token_body('too-long', lifetime))
+
+          written = keys_written_to_cache do
+            expect(token_for(orders_api)).to be_nil
+            expect(service.oauth_auth_header(AdditionalIssuerContext::EXTRA_ISSUER, audience: orders_api)).to eq({})
+          end
+
+          expect(written).to all(start_with('failed-fetch-'))
+        end
+      end
+    end
+
+    it 'logs one line for the response, naming the issuer and never the token' do
+      use_cache
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('too-long-secret', 604_801))
+
+      token_for(orders_api)
+
+      expect(log_lines.string.lines.size).to eq(1)
+      expect(log_lines.string).to include(AdditionalIssuerContext::EXTRA_ISSUER).and(satisfy { |text| !text.include?('too-long-secret') })
+    end
+
+    it 'is not asked for again until 10 seconds have passed' do
+      use_cache
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('too-long', 604_801))
+      token_for(orders_api)
+
+      Timecop.freeze(started_at + 10 - AdditionalIssuerContext::MILLISECOND) { token_for(orders_api) }
+      expect(token_requests(orders_api)).to have_been_made.once
+
+      Timecop.freeze(started_at + 10 + AdditionalIssuerContext::MILLISECOND) { token_for(orders_api) }
+      expect(token_requests(orders_api)).to have_been_made.twice
+    end
+
+    it 'is handed out and held, when it is exactly seven days, until three minutes before it expires' do
+      use_cache
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('week-long', seven_days))
+
+      expect(token_for(orders_api)).to include(token: 'week-long')
+
+      Timecop.freeze(started_at + seven_days - 180 - AdditionalIssuerContext::MILLISECOND) { token_for(orders_api) }
+      expect(token_requests(orders_api)).to have_been_made.once
+
+      Timecop.freeze(started_at + seven_days - 180 + AdditionalIssuerContext::MILLISECOND) { token_for(orders_api) }
+      expect(token_requests(orders_api)).to have_been_made.twice
+    end
+
+    it 'is handed out when it is a fraction of a second under seven days' do
+      use_cache
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('week-long', 604_799.5))
+
+      expect(token_for(orders_api)).to include(token: 'week-long')
+    end
+  end
+
   describe 'a token response whose lifetime is just over the three minutes held back' do
     before do
       use_cache

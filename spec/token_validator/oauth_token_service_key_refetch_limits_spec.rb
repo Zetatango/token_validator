@@ -202,4 +202,38 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(key_requests).to have_been_made.twice
     end
   end
+
+  # A request that is cut short -- a request timeout, an interrupt -- can arrive in a thread at any
+  # moment, including the instant it takes the lock that lets one thread refresh stale keys. The lock
+  # must never be left held, or no thread in the process would ever refresh that issuer's keys again.
+  describe 'an interrupt that arrives as the lock for refreshing stale keys is taken' do
+    # Delivers +error+ into the calling thread from another thread, once +lock+ has been taken, and
+    # waits until it is pending, so it reaches the thread exactly as the lock is recorded as taken.
+    def interrupt_after_taking(lock, error)
+      caller_thread = Thread.current
+      allow(lock).to receive(:try_lock).and_wrap_original do |try_lock|
+        taken = try_lock.call
+        Thread.new { caller_thread.raise(error) }.join
+        sleep 0.01
+        taken
+      end
+    end
+
+    before do
+      stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'))
+      extra_keys
+      Timecop.freeze(start + 1.hour + 1.minute)
+    end
+
+    it 'does not leave the lock held, so the next caller refreshes the keys' do
+      lock = service.send(:flight_lock, service.send(:jwks_cache_key, issuer))
+      interrupt_after_taking(lock, AdditionalIssuerContext::RequestCutShort)
+
+      expect { extra_keys }.to raise_error(AdditionalIssuerContext::RequestCutShort)
+      expect(lock).not_to be_locked
+
+      allow(lock).to receive(:try_lock).and_call_original
+      expect(kids_of(extra_keys)).to eq(['b'])
+    end
+  end
 end

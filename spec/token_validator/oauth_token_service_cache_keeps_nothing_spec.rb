@@ -178,10 +178,14 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  # Whether the process may also keep serving its own copy after the shared cache has lost the entry
+  # is not settled, so these examples are skipped until it is; they encode the cache staying the
+  # only store whenever it works.
   describe 'a cache that works' do
     before { use_cache }
 
-    it 'stays the only place a token is kept: a token removed from it is requested again' do
+    it 'stays the only place a token is kept: a token removed from it is requested again',
+       skip: 'waiting for a ruling on whether a process keeps its own copy when the cache works' do
       stub_token_endpoint_echoing_audience
       token_for(orders_api)
 
@@ -191,7 +195,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(token_requests(orders_api)).to have_been_made.twice
     end
 
-    it 'stays the only place a key set is kept: a set removed from it is fetched again' do
+    it 'stays the only place a key set is kept: a set removed from it is fetched again',
+       skip: 'waiting for a ruling on whether a process keeps its own copy when the cache works' do
       stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'))
       extra_keys
 

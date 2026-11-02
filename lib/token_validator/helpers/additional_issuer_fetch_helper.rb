@@ -31,6 +31,10 @@ module TokenValidator::AdditionalIssuerFetchHelper
   # endpoint that just failed.
   FAILED_FETCH_BACKOFF = 10.seconds
 
+  # The longest lifetime a machine token response may state. A longer one, or one that is not a
+  # finite number, is refused rather than believed and cached for that long.
+  ACCESS_TOKEN_MAX_LIFETIME = 7.days
+
   # A response that arrived but cannot be used. Raised and rescued within this module only.
   class UnusableResponse < StandardError; end
 
@@ -86,16 +90,21 @@ module TokenValidator::AdditionalIssuerFetchHelper
     expires_in = response['expires_in']
     raise UnusableResponse, 'the token response has no access_token' unless token.is_a?(String) && !token.empty?
     raise UnusableResponse, 'the token response has no numeric expires_in' unless expires_in.is_a?(Numeric)
-    raise UnusableResponse, 'the token lifetime is not a finite number' unless expires_in.finite?
-    raise UnusableResponse, 'the token lifetime is too short to use: 180 s or less' unless usable_lifetime?(expires_in)
+    raise UnusableResponse, unusable_lifetime_message unless usable_lifetime?(expires_in)
 
     { token:, expires: Time.now.to_i + expires_in, expires_in: }
   end
 
   # A token is cached, and handed out, until ACCESS_TOKEN_EXPIRY_MARGIN before it expires. One that
   # lives no longer than that could never be handed out, and its cache expiry would not be positive.
+  # A lifetime past ACCESS_TOKEN_MAX_LIFETIME, infinity included, is not believed.
   def usable_lifetime?(expires_in)
-    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN
+    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN && expires_in <= ACCESS_TOKEN_MAX_LIFETIME
+  end
+
+  def unusable_lifetime_message
+    "the token lifetime must be more than #{TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN.inspect} " \
+      "and at most #{ACCESS_TOKEN_MAX_LIFETIME.inspect}"
   end
 
   def fetch_json_object(method, url, payload = nil)

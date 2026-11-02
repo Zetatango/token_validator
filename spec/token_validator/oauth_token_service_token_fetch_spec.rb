@@ -59,6 +59,8 @@ RSpec.describe TokenValidator::OauthTokenService do
     @log_lines ||= StringIO.new
   end
 
+  def unusable_lifetime = 'the token lifetime must be more than 3 minutes and at most 7 days'
+
   # A cache that keeps nothing, as a null store does and as Rails' Redis store does while Redis is
   # unreachable.
   def with_a_cache_that_keeps_nothing
@@ -202,13 +204,13 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(requests_for(orders_api)).to have_been_made.once
     end
 
-    it 'logs that the lifetime is too short, naming the issuer and the audience' do
+    it 'logs that the lifetime is unusable, naming the issuer and the audience' do
       stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
 
       token_for(orders_api)
 
       expect(log_lines.string)
-        .to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: the token lifetime is too short to use: 180 s or less")
+        .to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
     end
 
     it 'does not raise when the cache refuses a negative expiry' do
@@ -227,6 +229,38 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       expect(token_for(orders_api)).to be_nil
       expect(requests_for(orders_api)).to have_been_made.twice
+    end
+  end
+
+  # A lifetime longer than seven days is not believed: the token is refused as unusable rather than
+  # cached for as long as the response claims.
+  describe 'a token that claims to live longer than seven days' do
+    before { with_cache }
+
+    it 'is accepted, and cached, at exactly seven days' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 604_800))
+
+      2.times { expect(token_for(orders_api)).to include(token: 'auth0-token', expires_in: 604_800) }
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    [604_801, 604_800.5].each do |lifetime|
+      it "is refused at #{lifetime} s, nothing is cached, and it starts the backoff" do
+        stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: lifetime))
+
+        expect(token_for(orders_api)).to be_nil
+        expect(token_for(orders_api)).to be_nil
+        expect(cache.read(service.send(:access_token_cache_key, auth0_issuer, orders_api), namespace: service.send(:namespace))).to be_nil
+        expect(requests_for(orders_api)).to have_been_made.once
+      end
+    end
+
+    it 'logs that the lifetime is unusable' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 604_801))
+
+      token_for(orders_api)
+
+      expect(log_lines.string).to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
     end
   end
 
@@ -267,13 +301,13 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(requests_for(orders_api)).to have_been_made.once
     end
 
-    it 'logs once that the lifetime is not a finite number, naming the issuer and the audience' do
+    it 'logs once that the lifetime is unusable, naming the issuer and the audience' do
       with_cache
 
       token_for(orders_api)
 
       expect(log_lines.string.lines).to contain_exactly(
-        a_string_including("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: the token lifetime is not a finite number")
+        a_string_including("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: #{unusable_lifetime}")
       )
     end
   end

@@ -89,10 +89,11 @@ additional issuer sees the changes below on that issuer's path only.
   - a published key that cannot be turned into a public verification key, a shared-secret key
     included. It is left out of the set, so a token naming it is refused like any unknown key;
   - a token response that is not a JSON object, lacks a non-empty `access_token`, or lacks a
-    finite numeric `expires_in`;
-  - a token that lives 180 s or less. It could never be handed out, because a token is handed out
-    only until three minutes before it expires, so it is refused, and the log says the lifetime is
-    too short.
+    numeric `expires_in`;
+  - a token that lives 180 s or less, or claims to live more than 7 days (604,800 s), infinity
+    included. A token that short could never be handed out, because a token is handed out only until
+    three minutes before it expires, and a longer lifetime is not believed. Either is refused, and
+    the log gives the range a lifetime must fall in.
 
   None of these responses is cached.
 

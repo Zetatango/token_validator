@@ -50,8 +50,10 @@ additional issuer sees the changes below on that issuer's path only.
 - `OauthTokenService#clear_signing_key(issuer)` naming an additional issuer now does what
   `refetch_signing_key` does: it fetches that issuer's keys again under the same limit, and the
   cached keys stay in place unless the fetch succeeds. A consumer that clears and then asks for the
-  keys again on an unknown key id therefore keeps verifying valid tokens when that fetch fails. With
-  no cache configured it fetches nothing. For the primary issuer it is unchanged.
+  keys again on an unknown key id therefore keeps verifying valid tokens when that fetch fails. It
+  now returns that refetch's result, the key set or `nil`, instead of the `true` or `false` of
+  deleting a cache entry. With no cache configured it fetches nothing. For the primary issuer it is
+  unchanged.
 
 ### Changed — additional issuers only
 

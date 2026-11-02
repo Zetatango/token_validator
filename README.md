@@ -61,6 +61,43 @@ TokenValidator::ValidatorConfig.configure(
 - Omitting `additional_issuers` leaves behaviour exactly as it was: one issuer, verified the way it
   always has been.
 
+### Machine tokens for a particular API
+
+A service that calls several others needs a machine token for each, because each accepts only tokens
+naming its own API. Ask an additional issuer for one by audience:
+
+```ruby
+service = TokenValidator::OauthTokenService.instance
+
+service.oauth_auth_header(ENV['auth0_issuer_url'], audience: ENV['orders_api_audience'])
+# => { authorization: 'Bearer ...' }, or {} when no token can be obtained
+```
+
+- Each token is cached under the issuer and the audience, and is handed out until three minutes
+  before it expires.
+- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before.
+- Passing `nil`, a blank or non-String value, or any audience for the primary issuer answers `nil`
+  (an empty header) and requests nothing. Check the setting before calling if a missing one should
+  be reported.
+
+### How an additional issuer's keys and tokens are fetched
+
+Each additional issuer is fetched from with these protections. The primary issuer's fetching is
+unchanged.
+
+- **Timeouts:** 5 s to connect and 10 s to read.
+- **Failures** answer no token, or a refused token for verification, and are logged without anything
+  from the response. They never raise.
+- **Backoff:** after a failed fetch the same thing is not asked for again for 10 s.
+- **Unknown key ids:** an issuer's keys are fetched again for one at most once a minute, and the
+  fetched set replaces the cached one only when the fetch succeeded.
+- **Key expiry:** cached keys are refreshed hourly. If the refresh fails they stay in use for up to a
+  day.
+- **One fetch at a time:** within a process, callers that miss the cache together share one fetch.
+
+The backoff, the refetch limit, the expiry and the single fetch need `Rails.cache`. With none
+configured, every call fetches.
+
 ## Installation
 
 This gem is not published to any gem host, so `gem install` cannot find it. Add the pinned GitHub

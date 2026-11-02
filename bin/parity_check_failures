@@ -1,0 +1,271 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs the primary issuer's machine-token and signing-key fetches through every failure shape this
+# library can meet, against one checkout of this gem, and prints what it observed as JSON: for each
+# call the answer or the exception (class and message), every HTTP request the gem made, what it
+# logged, and what it left in the cache and for how long.
+#
+# Two runs over two checkouts, diffed, show whether the primary issuer's failure behaviour changed.
+# It is the failure-path counterpart of bin/parity_check, which covers the successful paths.
+#
+#   bundle exec ruby bin/parity_check_failures --lib <path/to/lib> --out <transcript.json>
+#
+# The transcript goes to --out rather than stdout because the gem logs through a logger of its own.
+# Time is frozen, so the same code produces the same transcript on every run.
+
+require 'json'
+require 'optparse'
+require 'stringio'
+
+options = { lib: File.expand_path('../lib', __dir__), out: nil }
+OptionParser.new do |opts|
+  opts.on('--lib PATH') { |v| options[:lib] = File.expand_path(v) }
+  opts.on('--out PATH') { |v| options[:out] = File.expand_path(v) }
+end.parse!
+
+require 'rails'
+require 'active_support/all'
+require 'jwt'
+require 'json/jwt'
+require 'timecop'
+require 'webmock'
+require 'zlib'
+include WebMock::API # rubocop:disable Style/MixinUsage
+WebMock.enable!
+WebMock.disable_net_connect!
+
+# A --lib that does not exist would silently fall through to whatever library Bundler already has
+# on the load path -- producing a transcript of the wrong code that diffs clean against itself.
+abort "--lib does not exist: #{options[:lib]}" unless File.directory?(options[:lib])
+
+$LOAD_PATH.unshift(options[:lib])
+require 'token_validator'
+warn "token_validator #{TokenValidator::VERSION} from #{options[:lib]}"
+
+module ParityApp
+  class Application; end
+end
+Rails.application = ParityApp::Application.new
+
+ISSUER = 'https://idp.example.com/'
+TOKEN_URL = 'https://idp.example.com//oauth/token'
+JWKS_URL = 'https://idp.example.com//oauth/discovery/keys'
+AUDIENCE = 'https://api.example.com'
+START = Time.at(1_800_000_000)
+KEY = OpenSSL::PKey::RSA.new(2048)
+JWK = KEY.public_key.to_jwk(kid: 'primary-kid', use: 'sig', alg: 'RS512')
+
+# Every way a response or a connection can go wrong, as WebMock stubs.
+FAILURES = {
+  'status 400' => ->(stub) { stub.to_return(status: 400, body: 'bad') },
+  'status 401' => ->(stub) { stub.to_return(status: 401, body: '{"error":"invalid_client"}') },
+  'status 404' => ->(stub) { stub.to_return(status: 404) },
+  'status 429' => ->(stub) { stub.to_return(status: 429) },
+  'status 500' => ->(stub) { stub.to_return(status: 500, body: 'oops') },
+  'status 503' => ->(stub) { stub.to_return(status: 503) },
+  'redirect 301' => ->(stub) { stub.to_return(status: 301, headers: { 'Location' => 'https://elsewhere.example.com/' }) },
+  'redirect 302' => ->(stub) { stub.to_return(status: 302, headers: { 'Location' => 'https://elsewhere.example.com/' }) },
+  'timeout' => ->(stub) { stub.to_timeout },
+  'open timeout' => ->(stub) { stub.to_raise(Net::OpenTimeout) },
+  'read timeout' => ->(stub) { stub.to_raise(Net::ReadTimeout) },
+  'timeout error' => ->(stub) { stub.to_raise(Timeout::Error) },
+  'connection refused' => ->(stub) { stub.to_raise(Errno::ECONNREFUSED) },
+  'connection reset' => ->(stub) { stub.to_raise(Errno::ECONNRESET) },
+  'connection timed out' => ->(stub) { stub.to_raise(Errno::ETIMEDOUT) },
+  'host unreachable' => ->(stub) { stub.to_raise(Errno::EHOSTUNREACH) },
+  'broken pipe' => ->(stub) { stub.to_raise(Errno::EPIPE) },
+  'dns failure' => ->(stub) { stub.to_raise(SocketError) },
+  'tls failure' => ->(stub) { stub.to_raise(OpenSSL::SSL::SSLError) },
+  'end of file' => ->(stub) { stub.to_raise(EOFError) },
+  'io error' => ->(stub) { stub.to_raise(IOError) },
+  'bad status line' => ->(stub) { stub.to_raise(Net::HTTPBadResponse) },
+  'bad header' => ->(stub) { stub.to_raise(Net::HTTPHeaderSyntaxError) },
+  'protocol error' => ->(stub) { stub.to_raise(Net::ProtocolError) },
+  'corrupt gzip' => ->(stub) { stub.to_raise(Zlib::DataError) },
+  'runtime error' => ->(stub) { stub.to_raise(RuntimeError) },
+  'body empty' => ->(stub) { stub.to_return(status: 200, body: '') },
+  'body not json' => ->(stub) { stub.to_return(status: 200, body: '<html>maintenance</html>') },
+  'body json null' => ->(stub) { stub.to_return(status: 200, body: 'null') },
+  'body json list' => ->(stub) { stub.to_return(status: 200, body: '[]') },
+  'body json string' => ->(stub) { stub.to_return(status: 200, body: '"text"') },
+  'body json number' => ->(stub) { stub.to_return(status: 200, body: '42') },
+  'body json object' => ->(stub) { stub.to_return(status: 200, body: '{}') }
+}.freeze
+
+TOKEN_BODIES = {
+  'token only' => { access_token: 't' },
+  'lifetime only' => { expires_in: 3600 },
+  'token null' => { access_token: nil, expires_in: 3600 },
+  'token number' => { access_token: 5, expires_in: 3600 },
+  'lifetime string' => { access_token: 't', expires_in: '3600' },
+  'lifetime null' => { access_token: 't', expires_in: nil },
+  'lifetime 180' => { access_token: 't', expires_in: 180 },
+  'lifetime 100' => { access_token: 't', expires_in: 100 },
+  'lifetime 0' => { access_token: 't', expires_in: 0 },
+  'lifetime float' => { access_token: 't', expires_in: 3600.5 }
+}.freeze
+
+KEY_BODIES = {
+  'keys null' => { keys: nil },
+  'keys empty list' => { keys: [] },
+  'keys object' => { keys: {} },
+  'keys list of null' => { keys: [nil] },
+  'keys list of number' => { keys: [1] },
+  'keys list of empty object' => { keys: [{}] },
+  'key without modulus' => { keys: [{ kty: 'RSA', e: 'AQAB', kid: 'primary-kid' }] },
+  'good and bad keys' => { keys: [{}, JWK] }
+}.freeze
+
+def claims(overrides = {})
+  { sub: 'subject-1', iat: START.to_i - 60, exp: START.to_i + 1800, jti: 'jti-1', kid: 'primary-kid',
+    iss: ISSUER, aud: AUDIENCE, scopes: ['test:api'] }.merge(overrides)
+end
+
+TOKENS = {
+  'known kid' => JWT.encode(claims, KEY, 'RS512'),
+  'unknown kid' => JWT.encode(claims(kid: 'no-such-kid'), KEY, 'RS512')
+}.freeze
+
+# One scenario at a time, each from a clean slate: fresh cache, frozen clock, no leftover stubs.
+class Run
+  attr_reader :calls
+
+  def initialize(cache_kind:, raise_on_invalid_expiry: false)
+    @log = StringIO.new
+    @calls = []
+    @seen = {}
+    WebMock.reset!
+    Timecop.freeze(START)
+    ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = raise_on_invalid_expiry
+    @store = cache_kind == :memory ? ActiveSupport::Cache::MemoryStore.new : nil
+    Rails.cache = @store
+    TokenValidator::ValidatorConfig.configure(
+      issuer_url: ISSUER, audience: AUDIENCE, client_id: 'primary-client', client_secret: 'primary-secret', requested_scope: 'test:scope'
+    )
+    TokenValidator::ValidatorConfig.additional_issuers = []
+    TokenValidator::ValidatorConfig.logger = Logger.new(@log, formatter: proc { |_s, _t, _p, message| "#{message}\n" })
+    TokenValidator::TokenService.clear
+    service.instance_variable_set(:@access_token, nil)
+    # Where the redirect scenarios send the client, so following one is observable and no request leaves.
+    stub_request(:any, 'https://elsewhere.example.com/').to_return(status: 200, body: '{}')
+  end
+
+  def service = TokenValidator::OauthTokenService.instance
+
+  # Runs the block, recording its answer or the exception it raised, the requests and log lines it
+  # caused, and then advances the clock.
+  def call(label, advance: 0)
+    answer = begin
+      { 'answer' => yield }
+    rescue StandardError, WebMock::NetConnectNotAllowedError => e
+      { 'raised' => "#{e.class}: #{e.message}" }
+    end
+    @calls << answer.merge('call' => label, 'requests' => new_requests, 'logged' => drain_log)
+    Timecop.freeze(Time.now + advance) if advance.positive?
+  end
+
+  def cache_dump
+    return nil unless @store
+
+    data = @store.instance_variable_get(:@data)
+    data.to_h { |key, entry| [key, entry.respond_to?(:expires_at) ? entry.expires_at&.round(3) : nil] }.sort.to_h
+  end
+
+  # WebMock counts a request before it answers or raises, so this sees requests that failed too.
+  def new_requests
+    counts = WebMock::RequestRegistry.instance.requested_signatures.hash
+    counts.filter_map do |signature, count|
+      fresh = count - @seen.fetch(signature, 0)
+      next unless fresh.positive?
+
+      "#{signature.method.upcase} #{signature.uri} #{signature.body} x#{fresh}"
+    end.tap { @seen = counts.dup }
+  end
+
+  def drain_log
+    @log.string.strip.tap do
+      @log.truncate(0)
+      @log.rewind
+    end
+  end
+end
+
+def summarise_token(token) = token&.slice(:token, :expires, :expires_in)
+def summarise_keys(keys) = keys&.map { |key| key['kid'] }
+
+# Stubs +url+ with +shape+: a FAILURES lambda, or a literal body answered with status 200.
+def stub_with(method, url, shape)
+  pattern = stub_request(method, url)
+  shape.is_a?(Proc) ? shape.call(pattern) : pattern.to_return(status: 200, body: shape.to_json)
+end
+
+results = []
+[:memory, nil].each do |cache_kind|
+  cache_name = cache_kind || 'no cache'
+
+  # --- machine token failures: three calls, one clock tick apart, then the two header builders
+  FAILURES.each do |name, shape|
+    run = Run.new(cache_kind:)
+    stub_with(:post, TOKEN_URL, shape)
+    run.call('access_token 1', advance: 1) { summarise_token(run.service.access_token) }
+    run.call('access_token 2', advance: 60) { summarise_token(run.service.access_token) }
+    run.call('access_token 3') { summarise_token(run.service.access_token) }
+    run.call('oauth_auth_header') { run.service.oauth_auth_header }
+    run.call('basic_http_header') { run.service.basic_http_header }
+    results << { 'scenario' => "machine token, #{name}, cache: #{cache_name}", 'calls' => run.calls, 'cache' => run.cache_dump }
+  end
+
+  TOKEN_BODIES.each do |name, body|
+    [false, true].each do |raise_flag|
+      run = Run.new(cache_kind:, raise_on_invalid_expiry: raise_flag)
+      stub_with(:post, TOKEN_URL, body)
+      run.call('access_token 1', advance: 3 * 86_400) { summarise_token(run.service.access_token) }
+      run.call('access_token 2') { summarise_token(run.service.access_token) }
+      results << { 'scenario' => "machine token, #{name}, cache: #{cache_name}, raise on invalid expiry: #{raise_flag}",
+                   'calls' => run.calls, 'cache' => run.cache_dump }
+    end
+  end
+
+  # --- signing key failures: direct fetches, a refetch the way a consumer does it, and verification
+  FAILURES.each do |name, shape|
+    run = Run.new(cache_kind:)
+    stub_with(:get, JWKS_URL, shape)
+    run.call('signing_key 1', advance: 1) { summarise_keys(run.service.signing_key) }
+    run.call('signing_key 2', advance: 60) { summarise_keys(run.service.signing_key) }
+    run.call('clear_signing_key then signing_key') do
+      run.service.clear_signing_key
+      summarise_keys(run.service.signing_key)
+    end
+    TOKENS.each do |token_name, token|
+      run.call("verify #{token_name}") { TokenValidator::TokenService.new(token, ['test:api']).valid_access_token? }
+    end
+    results << { 'scenario' => "signing keys, #{name}, cache: #{cache_name}", 'calls' => run.calls, 'cache' => run.cache_dump }
+  end
+
+  KEY_BODIES.each do |name, body|
+    run = Run.new(cache_kind:)
+    stub_with(:get, JWKS_URL, body)
+    run.call('signing_key 1') { summarise_keys(run.service.signing_key) }
+    run.call('signing_key 2') { summarise_keys(run.service.signing_key) }
+    TOKENS.each do |token_name, token|
+      run.call("verify #{token_name}") { TokenValidator::TokenService.new(token, ['test:api']).valid_access_token? }
+    end
+    results << { 'scenario' => "signing keys, #{name}, cache: #{cache_name}", 'calls' => run.calls, 'cache' => run.cache_dump }
+  end
+
+  # --- a working set that later stops being fetchable, and a rotation while the endpoint is down
+  run = Run.new(cache_kind:)
+  stub_with(:get, JWKS_URL, { keys: [JWK] })
+  run.call('verify known kid') { TokenValidator::TokenService.new(TOKENS['known kid'], ['test:api']).valid_access_token? }
+  WebMock.reset!
+  stub_with(:get, JWKS_URL, ->(stub) { stub.to_return(status: 503) })
+  run.call('verify known kid, endpoint down', advance: 7200) { TokenValidator::TokenService.new(TOKENS['known kid'], ['test:api']).valid_access_token? }
+  run.call('verify unknown kid, endpoint down') { TokenValidator::TokenService.new(TOKENS['unknown kid'], ['test:api']).valid_access_token? }
+  run.call('verify known kid after the outage') { TokenValidator::TokenService.new(TOKENS['known kid'], ['test:api']).valid_access_token? }
+  results << { 'scenario' => "signing keys, set cached then endpoint down, cache: #{cache_name}", 'calls' => run.calls, 'cache' => run.cache_dump }
+end
+
+transcript = JSON.pretty_generate(results)
+options[:out] ? File.write(options[:out], transcript) : puts(transcript)
+warn "#{results.size} scenarios"

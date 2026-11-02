@@ -58,6 +58,17 @@ RSpec.shared_context 'with an additional issuer' do
     allow(Rails).to receive_messages(cache: store, application: AdditionalIssuerContext::Application.new)
   end
 
+  # The cache keys written while the block runs, which must be passed through to the real cache.
+  def keys_written_to_cache
+    written = []
+    allow(cache).to receive(:write).and_wrap_original do |write, key, *rest, **options|
+      written << key
+      write.call(key, *rest, **options)
+    end
+    yield
+    written
+  end
+
   def log_lines
     @log_lines ||= StringIO.new
   end

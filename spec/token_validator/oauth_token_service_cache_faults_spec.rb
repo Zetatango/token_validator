@@ -137,16 +137,6 @@ RSpec.describe TokenValidator::OauthTokenService do
       Timecop.freeze(Time.at(1_800_000_000))
     end
 
-    def keys_written_to_cache
-      written = []
-      allow(cache).to receive(:write).and_wrap_original do |write, key, *rest, **options|
-        written << key
-        write.call(key, *rest, **options)
-      end
-      yield
-      written
-    end
-
     unusable_lifetimes = [0, -5, 100, 179, 179.5, 180]
 
     [true, false].each do |strict_cache|
@@ -211,19 +201,55 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  # A lifetime that is not a finite number cannot be turned into an expiry time, so such a response is
+  # as unusable as one that lives too briefly: nothing is handed out, no token is cached, the response
+  # is logged, and the issuer is not asked again for 10 seconds.
   describe 'a token response whose lifetime is not a finite number' do
-    before { stub_request(:post, token_url).to_return(status: 200, body: '{"access_token":"t","expires_in":1e999}') }
+    let(:started_at) { Time.at(1_800_000_000) }
 
-    it 'never raises when the cache turns an expiry into whole milliseconds' do
-      use_cache(AdditionalIssuerContext::MillisecondExpiryStore.new)
+    before { Timecop.freeze(started_at) }
 
-      expect { token_for(orders_api) }.not_to raise_error
+    non_finite_lifetimes = ['1e999', '-1e999']
+
+    {
+      'a memory cache' => -> { ActiveSupport::Cache::MemoryStore.new },
+      'a cache that turns an expiry into whole milliseconds' => -> { AdditionalIssuerContext::MillisecondExpiryStore.new }
+    }.each do |kind, store|
+      non_finite_lifetimes.each do |lifetime|
+        it "answers nil and an empty header, caches no token and never raises for #{lifetime} s, in #{kind}" do
+          use_cache(store.call)
+          stub_request(:post, token_url).to_return(status: 200, body: %({"access_token":"t","expires_in":#{lifetime}}))
+
+          written = keys_written_to_cache do
+            expect(token_for(orders_api)).to be_nil
+            expect(service.oauth_auth_header(AdditionalIssuerContext::EXTRA_ISSUER, audience: orders_api)).to eq({})
+          end
+
+          expect(written).to all(start_with('failed-fetch-'))
+        end
+      end
     end
 
-    it 'never raises when the cache keeps expiries as they are' do
+    it 'logs one line for the response, naming the issuer and never the token' do
       use_cache
+      stub_request(:post, token_url).to_return(status: 200, body: '{"access_token":"infinite-secret","expires_in":1e999}')
 
-      expect { token_for(orders_api) }.not_to raise_error
+      token_for(orders_api)
+
+      expect(log_lines.string.lines.size).to eq(1)
+      expect(log_lines.string).to include(AdditionalIssuerContext::EXTRA_ISSUER).and(satisfy { |text| !text.include?('infinite-secret') })
+    end
+
+    it 'is not asked for again until 10 seconds have passed, and is never served from the cache' do
+      use_cache(AdditionalIssuerContext::MillisecondExpiryStore.new)
+      stub_request(:post, token_url).to_return(status: 200, body: '{"access_token":"t","expires_in":1e999}')
+      token_for(orders_api)
+
+      Timecop.freeze(started_at + 10 - AdditionalIssuerContext::MILLISECOND) { expect(token_for(orders_api)).to be_nil }
+      expect(token_requests(orders_api)).to have_been_made.once
+
+      Timecop.freeze(started_at + 10 + AdditionalIssuerContext::MILLISECOND) { expect(token_for(orders_api)).to be_nil }
+      expect(token_requests(orders_api)).to have_been_made.twice
     end
   end
 

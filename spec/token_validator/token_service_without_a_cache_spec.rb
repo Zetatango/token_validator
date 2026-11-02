@@ -5,7 +5,7 @@ require 'spec_helper'
 # An additional issuer's keys and machine tokens when the cache keeps nothing: a null store, or Rails'
 # Redis store while Redis is unreachable. One caller fetches, and the callers that waited on it reuse
 # what it fetched instead of each fetching in turn. Later callers in the same process reuse it too,
-# for as long as the cache would have kept it.
+# for as long as the cache would have kept it. A key the issuer rotates in is still fetched at once.
 module TokenValidatorWithoutACacheSpec
   Application = Class.new
 
@@ -31,7 +31,12 @@ RSpec.describe TokenValidator::TokenService do
   def orders_api = 'https://api.example.com/orders'
   def token_service = TokenValidator::OauthTokenService.instance
 
-  def auth0_key_set = { status: 200, body: { keys: [auth0_key.public_key.to_jwk(kid: auth0_kid, use: 'sig', alg: 'RS256')] }.to_json }
+  def rotated_key = MultiIssuerTokens::KEYS[:auth0_rotated]
+  def rotated_kid = 'auth0-rotated-kid'
+  def published(key, kid) = key.public_key.to_jwk(kid:, use: 'sig', alg: 'RS256')
+  def auth0_key_set = { status: 200, body: { keys: [published(auth0_key, auth0_kid)] }.to_json }
+  # The issuer's set once it has published a new key alongside the old one.
+  def rotated_key_set = { status: 200, body: { keys: [published(auth0_key, auth0_kid), published(rotated_key, rotated_kid)] }.to_json }
   def machine_token = { status: 200, body: { access_token: 'auth0-token', expires_in: 86_400 }.to_json }
   def machine_token_for_orders = token_service.access_token(auth0_issuer, audience: orders_api)
 
@@ -104,6 +109,18 @@ RSpec.describe TokenValidator::TokenService do
         expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
         Timecop.travel(fetched_at + 61.minutes) { validates?(auth0_token) }
         expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+      end
+
+      it 'verifies a token signed by a newly rotated key at once, fetching keys again at most once a minute' do
+        stub_request(:get, auth0_jwks_url).to_return(auth0_key_set, rotated_key_set)
+        validates?(auth0_token)
+        rotated_at = Time.now
+
+        expect(validates?(auth0_token(key: rotated_key, kid: rotated_kid))).to be true
+        expect(Timecop.travel(rotated_at + 59.seconds) { validates?(auth0_token(kid: 'unpublished-kid')) }).to be false
+        expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+        Timecop.travel(rotated_at + 61.seconds) { validates?(auth0_token(kid: 'unpublished-kid')) }
+        expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
       end
 
       it 'keeps verifying with the keys through failed refreshes for a day, and not after' do

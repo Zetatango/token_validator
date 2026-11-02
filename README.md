@@ -124,7 +124,8 @@ configured, every call fetches.
   key set, so each process works from its own copies: one fetch per token or key set, reused until
   it expires. The backoff and the refetch limit still hold within each process.
 - **A store that refuses writes**, as Rails' Redis store does while Redis is unreachable, behaves the
-  same way, except that no key set is fetched again for an unknown key id: such a token is refused.
+  same way, so a key set is still fetched again for an unknown key id at most once a minute in each
+  process.
 
 ### Tests in a consuming app
 

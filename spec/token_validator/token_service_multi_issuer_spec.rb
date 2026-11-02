@@ -164,6 +164,26 @@ RSpec.describe TokenValidator::TokenService do
 
       expect(validates?(auth0_token(audience: 'https://other.example.com'))).to be true
     end
+
+    # An entry may list several audiences, for a service that accepts tokens naming more than one API.
+    describe 'when the entry lists several' do
+      def own_api = 'https://own.example.com'
+
+      before { TokenValidator::ValidatorConfig.additional_issuers = [auth0_entry.merge(audience: [auth0_audience, own_api])] }
+
+      it 'accepts a token naming any one of them' do
+        expect(validates?(auth0_token(audience: own_api))).to be true
+        expect(validates?(auth0_token(audience: auth0_audience))).to be true
+      end
+
+      it 'refuses a token naming none of them' do
+        bad = auth0_token(audience: 'https://other.example.com')
+
+        expect(rejection_for(bad)).to be_a(TokenValidator::TokenService::InvalidAudienceException)
+          .and have_attributes(message: 'Invalid audience')
+        expect(validates?(bad)).to be false
+      end
+    end
   end
 
   describe 'where the kid is written' do

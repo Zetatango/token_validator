@@ -50,6 +50,7 @@ TokenValidator::ValidatorConfig.configure(
   when it is configured rather than when a token arrives.
 - An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
   asked for one, rather than falling back to the primary issuer's credentials.
+- `audience` may be a list. A token naming any one of its members verifies.
 - A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
   it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
   configuration it cannot trust. The exception names the offending position and key but **not the
@@ -75,7 +76,8 @@ service.oauth_auth_header(ENV['auth0_issuer_url'], audience: ENV['orders_api_aud
 
 - Each token is cached under the issuer and the audience, and is handed out until three minutes
   before it expires.
-- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before.
+- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before. An entry
+  whose `audience` is a list answers `nil` instead and requests nothing: name the one you want.
 - Passing `nil`, a blank or non-String value, or any audience for the primary issuer answers `nil`
   (an empty header) and requests nothing. Check the setting before calling if a missing one should
   be reported.

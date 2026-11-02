@@ -35,6 +35,9 @@ additional issuer sees the changes below on that issuer's path only.
     value, any audience for the primary issuer (which is never sent one), and any audience for an
     issuer configured only for verification. Only leaving the keyword out means "the entry's
     audience", so a setting that was never configured cannot quietly fetch a token for another API
+  - an entry whose `audience` is a list, called with the keyword left out, answers nil and requests
+    nothing, because a token is asked for one API at a time. Naming an audience works as above. A
+    list on the entry still verifies a token naming any one of its members
 
 - `OauthTokenService#refetch_signing_key(issuer = nil)`, which fetches an issuer's keys again for a
   token naming a key id the cached set lacks, and answers the set to search. `TokenService` now uses

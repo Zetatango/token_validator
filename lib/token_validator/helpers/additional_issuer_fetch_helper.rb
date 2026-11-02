@@ -46,7 +46,7 @@ module TokenValidator::AdditionalIssuerFetchHelper
 
   # +audience+ is the API the caller named, or ENTRY_AUDIENCE for the one the entry carries.
   def additional_issuer_access_token(entry, audience)
-    return nil unless entry_audience?(audience) || requestable_audience?(audience)
+    return nil unless entry_audience?(audience) ? single_entry_audience?(entry) : requestable_audience?(audience)
     return request_additional_access_token(entry, audience) if Rails.cache.nil?
 
     cache_key = access_token_cache_key(entry[:issuer_url], audience)
@@ -113,6 +113,12 @@ module TokenValidator::AdditionalIssuerFetchHelper
   # than replaced with the entry's audience.
   def requestable_audience?(audience)
     audience.is_a?(String) && !audience.strip.empty?
+  end
+
+  # An entry may list several audiences, so that tokens naming any of them verify. A token is asked
+  # for one API only, so a caller of such an entry must name the one it wants.
+  def single_entry_audience?(entry)
+    !entry[:audience].is_a?(Array)
   end
 
   # Shared through the cache, so one process's failure holds back every process for the backoff.

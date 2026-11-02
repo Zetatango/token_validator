@@ -83,7 +83,12 @@ additional issuer sees the changes below on that issuer's path only.
   - a published key that cannot be turned into a verification key. It is left out of the set, so a
     token naming it is refused like any unknown key;
   - a token response that is not a JSON object, lacks a non-empty `access_token`, or lacks a
-    numeric `expires_in`. Such a response is never cached.
+    numeric `expires_in`;
+  - a token that lives 180 s or less. It could never be handed out, because a token is handed out
+    only until three minutes before it expires, so it is refused, and the log says the lifetime is
+    too short.
+
+  None of these responses is cached.
 
   Each failure is logged once, naming the issuer, the audience and the error class or what was wrong
   with the response. Nothing from the response body is ever logged, because a body can echo a

@@ -32,8 +32,8 @@ RSpec.describe TokenValidator::OauthTokenService do
     allow(Rails).to receive_messages(cache:, application: TokenValidatorTokenFetchSpec::Application.new)
   end
 
-  def token_body(value = 'auth0-token')
-    { access_token: value, expires_in: 86_400 }.to_json
+  def token_body(value = 'auth0-token', expires_in: 86_400)
+    { access_token: value, expires_in: }.to_json
   end
 
   def token_for(audience)
@@ -109,7 +109,9 @@ RSpec.describe TokenValidator::OauthTokenService do
       'a body with no access_token' => ->(stub) { stub.to_return(status: 200, body: { expires_in: 86_400 }.to_json) },
       'a body with an empty access_token' => ->(stub) { stub.to_return(status: 200, body: token_body('')) },
       'a body with no expires_in' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't' }.to_json) },
-      'a body whose expires_in is not a number' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't', expires_in: '86400' }.to_json) }
+      'a body whose expires_in is not a number' => ->(stub) { stub.to_return(status: 200, body: { access_token: 't', expires_in: '86400' }.to_json) },
+      'a token that lives only the three minutes held back' => ->(stub) { stub.to_return(status: 200, body: token_body(expires_in: 180)) },
+      'a token with no lifetime left' => ->(stub) { stub.to_return(status: 200, body: token_body(expires_in: 0)) }
     }.each do |failure, respond|
       it "answers nil, and an empty header, for #{failure}" do
         instance_exec(stub_request(:post, auth0_token_url), &respond)
@@ -142,6 +144,60 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       expect(log_lines.string).to include('JSON::ParserError')
       expect(log_lines.string).not_to include('auth0-secret')
+    end
+  end
+
+  # A token is handed out until three minutes before it expires, so one that lives no longer than that
+  # could never be handed out. It is refused as unusable, and never cached.
+  describe 'a token that lives three minutes or less' do
+    before { with_cache }
+
+    around do |example|
+      raise_on_invalid_expiry = ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time
+      example.run
+    ensure
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = raise_on_invalid_expiry
+    end
+
+    it 'is refused at exactly three minutes, and nothing is cached' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 180))
+
+      expect(token_for(orders_api)).to be_nil
+      expect(cache.read(service.send(:access_token_cache_key, auth0_issuer, orders_api), namespace: service.send(:namespace))).to be_nil
+    end
+
+    it 'is accepted, and cached, at one second over' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 181))
+
+      2.times { expect(token_for(orders_api)).to include(token: 'auth0-token', expires_in: 181) }
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'logs that the lifetime is too short, naming the issuer and the audience' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+
+      token_for(orders_api)
+
+      expect(log_lines.string)
+        .to include("Could not fetch a machine token for #{orders_api} from #{auth0_issuer}: the token lifetime is too short to use: 180 s or less")
+    end
+
+    it 'does not raise when the cache refuses a negative expiry' do
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = true
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+
+      expect(token_for(orders_api)).to be_nil
+    end
+
+    it 'is not handed out thirty days later by a cache that ignores a negative expiry' do
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = false
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 60))
+      token_for(orders_api)
+
+      Timecop.travel(Time.now + 30.days)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.twice
     end
   end
 

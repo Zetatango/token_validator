@@ -75,7 +75,7 @@ service.oauth_auth_header(ENV['auth0_issuer_url'], audience: ENV['orders_api_aud
 ```
 
 - Each token is cached under the issuer and the audience, and is handed out until three minutes
-  before it expires.
+  before it expires. A token that lives three minutes or less is refused, and the log says why.
 - Leaving `audience:` out asks for the audience the issuer entry names, exactly as before. An entry
   whose `audience` is a list answers `nil` instead and requests nothing: name the one you want.
 - Passing `nil`, a blank or non-String value, or any audience for the primary issuer answers `nil`

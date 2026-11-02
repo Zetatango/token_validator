@@ -85,8 +85,15 @@ module TokenValidator::AdditionalIssuerFetchHelper
     expires_in = response['expires_in']
     raise UnusableResponse, 'the token response has no access_token' unless token.is_a?(String) && !token.empty?
     raise UnusableResponse, 'the token response has no numeric expires_in' unless expires_in.is_a?(Numeric)
+    raise UnusableResponse, 'the token lifetime is too short to use: 180 s or less' unless usable_lifetime?(expires_in)
 
     { token:, expires: Time.now.to_i + expires_in, expires_in: }
+  end
+
+  # A token is cached, and handed out, until ACCESS_TOKEN_EXPIRY_MARGIN before it expires. One that
+  # lives no longer than that could never be handed out, and its cache expiry would not be positive.
+  def usable_lifetime?(expires_in)
+    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN
   end
 
   def fetch_json_object(method, url, payload = nil)

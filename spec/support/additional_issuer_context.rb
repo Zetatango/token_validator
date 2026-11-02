@@ -16,6 +16,8 @@ module AdditionalIssuerContext
   ORDERS_API = 'https://api.example.com/orders'
   BILLING_API = 'https://api.example.com/billing'
 
+  MILLISECOND = 0.001
+
   SIGNING_KEYS = Hash.new { |keys, kid| keys[kid] = OpenSSL::PKey::RSA.new(2048) }
 
   # Cache whose writes always report failure and store nothing, as a cache store does when its

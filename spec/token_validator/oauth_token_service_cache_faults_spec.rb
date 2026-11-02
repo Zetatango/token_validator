@@ -61,6 +61,39 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  describe 'a cache that discards everything, asked about an unknown key id again and again' do
+    before do
+      use_cache(ActiveSupport::Cache::NullStore.new)
+      stub_request(:get, jwks_url).to_return(key_set_response('a'))
+    end
+
+    it 'still fetches the keys at most once a minute' do
+      5.times { refetched_extra_keys }
+
+      expect(key_requests).to have_been_made.once
+    end
+
+    it 'fetches again once the minute has passed, and not a moment before' do
+      Timecop.freeze(Time.at(1_800_000_000))
+      refetched_extra_keys
+
+      Timecop.freeze(Time.at(1_800_000_000 + 60 - AdditionalIssuerContext::MILLISECOND)) { refetched_extra_keys }
+      expect(key_requests).to have_been_made.once
+
+      Timecop.freeze(Time.at(1_800_000_000 + 60 + AdditionalIssuerContext::MILLISECOND)) { refetched_extra_keys }
+      expect(key_requests).to have_been_made.twice
+    end
+
+    it 'counts the minute for each issuer separately' do
+      other = 'https://other-tenant.ca.auth0.com/'
+      TokenValidator::ValidatorConfig.additional_issuers = [extra_entry, extra_entry.merge(issuer_url: other, jwks_url: "#{other}jwks.json")]
+      stub_request(:get, "#{other}jwks.json").to_return(key_set_response('b'))
+      refetched_extra_keys
+
+      expect(kids_of(service.refetch_signing_key(other))).to eq(['b'])
+    end
+  end
+
   describe 'no cache at all' do
     before { allow(Rails).to receive(:cache).and_return(nil) }
 
@@ -88,9 +121,10 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
-  describe 'a machine token whose lifetime is shorter than the three minutes held back' do
-    let(:short_lived) { { status: 200, body: token_body('short-lived', 100) } }
-
+  # A token that lives no longer than the three minutes held back can never be reused, so a response
+  # offering one is unusable: nothing is handed out and no token is cached, the response is logged, and
+  # the issuer is not asked again for the usual 10 seconds, as after any other failed fetch.
+  describe 'a token response whose lifetime is no more than the three minutes held back' do
     around do |example|
       original = ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time
       example.run
@@ -100,44 +134,102 @@ RSpec.describe TokenValidator::OauthTokenService do
 
     before do
       use_cache
-      stub_request(:post, token_url).to_return(short_lived)
+      Timecop.freeze(Time.at(1_800_000_000))
     end
 
-    it 'does not raise when the cache refuses a negative expiry' do
-      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = true
-
-      expect { token_for(orders_api) }.not_to raise_error
+    def keys_written_to_cache
+      written = []
+      allow(cache).to receive(:write).and_wrap_original do |write, key, *rest, **options|
+        written << key
+        write.call(key, *rest, **options)
+      end
+      yield
+      written
     end
 
-    it 'is not handed out again once its lifetime has passed, when the cache ignores a negative expiry' do
-      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = false
+    unusable_lifetimes = [0, -5, 100, 179, 179.5, 180]
+
+    [true, false].each do |strict_cache|
+      unusable_lifetimes.each do |lifetime|
+        it "answers nil and an empty header, caches no token and never raises for #{lifetime} s, strict cache expiry #{strict_cache}" do
+          ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = strict_cache
+          stub_request(:post, token_url).to_return(status: 200, body: token_body('short-lived', lifetime))
+
+          written = keys_written_to_cache do
+            expect(token_for(orders_api)).to be_nil
+            expect(service.oauth_auth_header(AdditionalIssuerContext::EXTRA_ISSUER, audience: orders_api)).to eq({})
+          end
+
+          expect(written).to all(start_with('failed-fetch-'))
+        end
+      end
+    end
+
+    it 'logs one line for the response, naming the issuer and never the token' do
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('short-lived-secret', 100))
+
       token_for(orders_api)
 
-      Timecop.travel(Time.now + 101.seconds) { token_for(orders_api) }
+      expect(log_lines.string.lines.size).to eq(1)
+      expect(log_lines.string).to include(AdditionalIssuerContext::EXTRA_ISSUER).and(satisfy { |text| !text.include?('short-lived-secret') })
+    end
+
+    it 'is not asked for again until 10 seconds have passed, as after any failed fetch' do
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('short-lived', 100))
+      token_for(orders_api)
+
+      Timecop.freeze(Time.at(1_800_000_000 + 10 - AdditionalIssuerContext::MILLISECOND)) { expect(token_for(orders_api)).to be_nil }
+      expect(token_requests(orders_api)).to have_been_made.once
+
+      Timecop.freeze(Time.at(1_800_000_000 + 10 + AdditionalIssuerContext::MILLISECOND)) { expect(token_for(orders_api)).to be_nil }
+      expect(token_requests(orders_api)).to have_been_made.twice
+    end
+
+    it 'is never served later, however long afterwards: it is asked for again and refused again' do
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('short-lived', 100))
+      token_for(orders_api)
+
+      Timecop.freeze(Time.at(1_800_000_000 + (3 * 86_400))) { expect(token_for(orders_api)).to be_nil }
 
       expect(token_requests(orders_api)).to have_been_made.twice
+    end
+
+    it 'is replaced by a usable token as soon as the issuer offers one after the backoff' do
+      stub_request(:post, token_url).to_return({ status: 200, body: token_body('short-lived', 100) }, { status: 200, body: token_body('usable') })
+      token_for(orders_api)
+
+      Timecop.freeze(Time.at(1_800_000_000 + 11)) { expect(token_for(orders_api)).to include(token: 'usable') }
+    end
+
+    it 'does not hold back the same issuer\'s tokens for other audiences' do
+      stub_request(:post, token_url).with(body: hash_including('audience' => orders_api)).to_return(status: 200, body: token_body('short', 100))
+      stub_request(:post, token_url).with(body: hash_including('audience' => AdditionalIssuerContext::BILLING_API))
+                                    .to_return(status: 200, body: token_body('long'))
+      token_for(orders_api)
+
+      expect(token_for(AdditionalIssuerContext::BILLING_API)).to include(token: 'long')
     end
   end
 
-  describe 'a machine token whose lifetime is exactly the three minutes held back, or just over' do
+  describe 'a token response whose lifetime is just over the three minutes held back' do
     before do
       use_cache
       Timecop.freeze(Time.at(1_800_000_000))
-      stub_request(:post, token_url).with(body: hash_including('audience' => orders_api)).to_return(status: 200, body: token_body('exact', 180))
-      stub_request(:post, token_url).with(body: hash_including('audience' => AdditionalIssuerContext::BILLING_API))
-                                    .to_return(status: 200, body: token_body('over', 181))
+      stub_request(:post, token_url).to_return(status: 200, body: token_body('over', 181))
     end
 
-    it 'is handed out, but not held, at exactly three minutes' do
-      2.times { expect(token_for(orders_api)).to include(token: 'exact') }
+    it 'is handed out and held for the second that remains' do
+      2.times { expect(token_for(orders_api)).to include(token: 'over') }
+
+      expect(token_requests(orders_api)).to have_been_made.once
+    end
+
+    it 'is asked for again once that second has passed' do
+      token_for(orders_api)
+
+      Timecop.freeze(Time.at(1_800_000_000 + 1 + AdditionalIssuerContext::MILLISECOND)) { token_for(orders_api) }
 
       expect(token_requests(orders_api)).to have_been_made.twice
-    end
-
-    it 'is handed out and held, for a second, at one second over' do
-      2.times { expect(token_for(AdditionalIssuerContext::BILLING_API)).to include(token: 'over') }
-
-      expect(token_requests(AdditionalIssuerContext::BILLING_API)).to have_been_made.once
     end
   end
 end

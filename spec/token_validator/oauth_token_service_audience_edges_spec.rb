@@ -106,6 +106,25 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
   end
 
+  describe 'an issuer entry whose audience is a list' do
+    before do
+      TokenValidator::ValidatorConfig.additional_issuers = [extra_entry.merge(audience: [entry_api, "#{entry_api}/userinfo"])]
+      stub_token_endpoint_echoing_audience
+    end
+
+    it 'answers nil and an empty header, and requests nothing, when no audience is named' do
+      none = :unset
+      expect { none = service.access_token(extra_issuer) }.not_to(change { requests_made })
+
+      expect(none).to be_nil
+      expect(service.oauth_auth_header(extra_issuer)).to eq({})
+    end
+
+    it 'still answers a token for an audience that is named' do
+      expect(token_for(orders_api)).to include(token: "token-for-#{orders_api}")
+    end
+  end
+
   describe 'unusual audiences' do
     it 'tells apart two audiences that differ only by whitespace or case, and never mixes their tokens' do
       stub_token_endpoint_echoing_audience

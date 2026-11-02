@@ -91,6 +91,8 @@ additional issuer sees the changes below on that issuer's path only.
 - **The primary issuer's fetching**, deliberately: the HTTP client's default timeouts, the exceptions
   it has always let through, no backoff, no limit on refetching keys, and no expiry on cached keys.
   Pinned by spec. A later release may extend the same handling to it.
+- **`OauthTokenService#get_token_info`**, which asks only the primary issuer about a token. It keeps
+  that issuer's behaviour above, and a later release may extend the same handling to it too.
 
 ### Tooling
 

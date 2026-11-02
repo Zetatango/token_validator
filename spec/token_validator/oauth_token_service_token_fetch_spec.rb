@@ -148,7 +148,7 @@ RSpec.describe TokenValidator::OauthTokenService do
   end
 
   # A token is handed out until three minutes before it expires, so one that lives no longer than that
-  # could never be handed out. It is refused as unusable, and never cached.
+  # could never be handed out. It is refused as unusable, never cached, and starts the backoff.
   describe 'a token that lives three minutes or less' do
     before { with_cache }
 
@@ -164,6 +164,14 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       expect(token_for(orders_api)).to be_nil
       expect(cache.read(service.send(:access_token_cache_key, auth0_issuer, orders_api), namespace: service.send(:namespace))).to be_nil
+    end
+
+    it 'counts as a failed fetch, so it is not asked for again within the backoff' do
+      stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body(expires_in: 180))
+      token_for(orders_api)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.once
     end
 
     it 'is accepted, and cached, at one second over' do

@@ -11,7 +11,8 @@ require 'zlib'
 #
 # Every fetch has explicit timeouts, and each failure in FETCH_FAILURES answers nil rather than
 # raising. After a failure the same thing is not asked for again for a short while, and within one
-# process only one thread fetches a given thing at a time.
+# process only one thread fetches a given thing at a time; the threads waiting on it reuse what it
+# fetched, from the cache or from this process's own copy.
 #
 # Kept apart from the primary issuer's path in TokenCacheHelper, which decides which of the two a
 # request takes. The primary path stays exactly as it has always behaved, failures included, so
@@ -22,10 +23,18 @@ module TokenValidator::AdditionalIssuerFetchHelper
   FETCH_OPEN_TIMEOUT = 5
   FETCH_READ_TIMEOUT = 10
 
+  # Redirects are never followed: keys and tokens come only from the addresses the issuer entry
+  # names. A redirect answers as an HTTP error, one of FETCH_FAILURES.
+  FETCH_MAX_REDIRECTS = 0
+
   # After a failed fetch, how long the same thing -- one token, or one issuer's keys -- is not asked
   # for again. Calls in the meantime answer as the failed fetch did, rather than each waiting on an
   # endpoint that just failed.
   FAILED_FETCH_BACKOFF = 10.seconds
+
+  # The longest lifetime a machine token response may state. A longer one, or one that is not a
+  # finite number, is refused rather than believed and cached for that long.
+  ACCESS_TOKEN_MAX_LIFETIME = 7.days
 
   # A response that arrived but cannot be used. Raised and rescued within this module only.
   class UnusableResponse < StandardError; end
@@ -58,22 +67,30 @@ module TokenValidator::AdditionalIssuerFetchHelper
     end
   end
 
+  # The shared cache's token, else this process's copy of the last one it fetched.
   def cached_access_token(cache_key)
-    Rails.cache.read(cache_key, namespace:)
+    Rails.cache.read(cache_key, namespace:) || kept_in_process(cache_key)
   end
 
   def obtain_access_token(entry, audience, cache_key)
     return nil if backing_off?(cache_key)
 
     token = request_additional_access_token(entry, audience)
-    token.nil? ? back_off(cache_key) : store_access_token(cache_key, token)
+    token.nil? ? back_off(cache_key) : keep_access_token(cache_key, token)
     token
+  end
+
+  # In the shared cache, and in this process for when the cache keeps nothing, both until
+  # ACCESS_TOKEN_EXPIRY_MARGIN before the token expires.
+  def keep_access_token(cache_key, token)
+    store_access_token(cache_key, token)
+    keep_in_process(cache_key, token, token[:expires_in] - TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN)
   end
 
   def request_additional_access_token(entry, audience)
     access_token_from(fetch_json_object(:post, token_endpoint_for(entry), access_token_params(entry, audience)))
   rescue *FETCH_FAILURES => e
-    report_failed_fetch(entry_audience?(audience) ? 'a machine token' : "a machine token for #{audience}", entry, e)
+    report_failed_fetch(entry_audience?(audience) ? 'a machine token' : "a machine token for #{audience.inspect}", entry, e)
     nil
   end
 
@@ -82,21 +99,27 @@ module TokenValidator::AdditionalIssuerFetchHelper
     expires_in = response['expires_in']
     raise UnusableResponse, 'the token response has no access_token' unless token.is_a?(String) && !token.empty?
     raise UnusableResponse, 'the token response has no numeric expires_in' unless expires_in.is_a?(Numeric)
-    raise UnusableResponse, 'the token lifetime is too short to use: 180 s or less' unless usable_lifetime?(expires_in)
+    raise UnusableResponse, unusable_lifetime_message unless usable_lifetime?(expires_in)
 
     { token:, expires: Time.now.to_i + expires_in, expires_in: }
   end
 
   # A token is cached, and handed out, until ACCESS_TOKEN_EXPIRY_MARGIN before it expires. One that
   # lives no longer than that could never be handed out, and its cache expiry would not be positive.
+  # A lifetime past ACCESS_TOKEN_MAX_LIFETIME, infinity included, is not believed.
   def usable_lifetime?(expires_in)
-    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN
+    expires_in > TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN && expires_in <= ACCESS_TOKEN_MAX_LIFETIME
+  end
+
+  def unusable_lifetime_message
+    "the token lifetime must be more than #{TokenValidator::TokenCacheHelper::ACCESS_TOKEN_EXPIRY_MARGIN.inspect} " \
+      "and at most #{ACCESS_TOKEN_MAX_LIFETIME.inspect}"
   end
 
   def fetch_json_object(method, url, payload = nil)
-    response = JSON.parse(
-      RestClient::Request.execute(method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT)
-    )
+    body = RestClient::Request.execute(method:, url:, payload:, open_timeout: FETCH_OPEN_TIMEOUT, read_timeout: FETCH_READ_TIMEOUT,
+                                       max_redirects: FETCH_MAX_REDIRECTS)
+    response = JSON.parse(body)
     raise UnusableResponse, 'the response is not a JSON object' unless response.is_a?(Hash)
 
     response
@@ -158,7 +181,8 @@ module TokenValidator::AdditionalIssuerFetchHelper
   end
 
   # Names the error's class, or what was wrong with a response, and never anything the response
-  # carried, since a body can echo a credential.
+  # carried, since a body can echo a credential. An audience comes from the caller, so it is logged
+  # quoted and escaped, which keeps it on the one line.
   def report_failed_fetch(what, entry, error)
     reason = error.is_a?(UnusableResponse) ? error.message : error.class.name
     TokenValidator::ValidatorConfig.logger.error("Could not fetch #{what} from #{entry[:issuer_url]}: #{reason}")

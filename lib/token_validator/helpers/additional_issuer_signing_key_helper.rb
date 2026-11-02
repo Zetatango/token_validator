@@ -63,18 +63,28 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     end
   end
 
+  # What clearing an additional issuer's keys does: the refetch made for an unknown key id, under the
+  # same limit, so the keys valid callers rely on stay in place unless a fetch replaces them. Without
+  # a cache there is nothing to clear, and nothing is fetched.
+  def cleared_additional_signing_key(entry)
+    refetched_additional_signing_key(entry) unless Rails.cache.nil?
+  end
+
   # One thread refreshes; the others carry on with the stale set rather than wait, since it still
   # verifies every token signed by a key the issuer has not withdrawn. The thread that takes the lock
   # looks again first, in case another finished a refresh after this one found the set stale.
+  #
+  # The lock is taken with interrupts held back, so an exception raised into this thread (a request
+  # timeout, say) arrives only once taking it has been recorded, and the ensure then releases it.
   def refresh_stale_signing_key(entry, stale_keys)
     lock = flight_lock(jwks_cache_key(entry[:issuer_url]))
-    return stale_keys unless lock.try_lock
+    locked = false
+    Thread.handle_interrupt(Object => :never) { locked = lock.try_lock }
+    return stale_keys unless locked
 
-    begin
-      fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
-    ensure
-      lock.unlock
-    end
+    fresh_signing_key(entry) || refresh_signing_key(entry) || stale_keys
+  ensure
+    lock.unlock if locked
   end
 
   # Fetches the issuer's keys and, only when that succeeds, replaces the cached set with them. A
@@ -84,19 +94,27 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     return nil if backing_off?(jwks_key)
 
     keys = download_additional_signing_key(entry)
-    if keys
-      Rails.cache.write(jwks_key, keys, namespace:, expires_in: SIGNING_KEY_MAX_AGE)
-      Rails.cache.write(jwks_fresh_key(entry), true, namespace:, expires_in: SIGNING_KEY_REFRESH_AFTER)
-    else
-      back_off(jwks_key)
-    end
+    keys ? keep_signing_key(entry, keys) : back_off(jwks_key)
     keys
   end
 
-  # An empty set counts as nothing cached, so it is fetched again. This library never caches one, but
-  # an earlier release sharing the cache can, from a key set that listed no keys.
+  # In the shared cache, and in this process for when the cache keeps nothing: the set for
+  # SIGNING_KEY_MAX_AGE, and the mark that it is fresh for SIGNING_KEY_REFRESH_AFTER.
+  def keep_signing_key(entry, keys)
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    Rails.cache.write(jwks_key, keys, namespace:, expires_in: SIGNING_KEY_MAX_AGE)
+    Rails.cache.write(jwks_fresh_key(entry), true, namespace:, expires_in: SIGNING_KEY_REFRESH_AFTER)
+    keep_in_process(jwks_key, keys, SIGNING_KEY_MAX_AGE)
+    mark_in_process(jwks_fresh_key(entry), SIGNING_KEY_REFRESH_AFTER)
+  end
+
+  # The shared cache's set, else this process's copy of the last one it fetched. The shared set comes
+  # first, so keys another process fetched after a rotation are found here too. An empty set counts
+  # as nothing cached, so it is fetched again. This library never caches one, but an earlier release
+  # sharing the cache can, from a key set that listed no keys.
   def cached_signing_key(entry)
-    Rails.cache.read(jwks_cache_key(entry[:issuer_url]), namespace:).presence
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    Rails.cache.read(jwks_key, namespace:).presence || kept_in_process(jwks_key)
   end
 
   def fresh_signing_key(entry)
@@ -104,17 +122,22 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   end
 
   def signing_key_fresh?(entry)
-    Rails.cache.exist?(jwks_fresh_key(entry), namespace:)
+    fresh_key = jwks_fresh_key(entry)
+    Rails.cache.exist?(fresh_key, namespace:) || marked_in_process?(fresh_key)
   end
 
-  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in this process and in the
-  # cache shared with other processes. The process's own slot holds the limit when the cache keeps
-  # nothing. A cache that refuses the write answers no, which is the safe direction: the token is
-  # refused and the cached keys stand.
+  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in the cache shared with
+  # other processes and then in this process. The process's own slot holds the limit when the cache
+  # keeps nothing. It is taken only once the shared slot is won, so a slot another process holds never
+  # keeps this one waiting past that slot's end. A cache that refuses the write answers no, which is
+  # the safe direction: the token is refused and the cached keys stand.
   def refetch_allowed?(entry)
     marker = jwks_refetch_key(entry)
-    mark_in_process_unless_marked(marker, JWKS_REFETCH_COOLDOWN) &&
-      Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+    return false if marked_in_process?(marker)
+    return false unless Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+
+    mark_in_process(marker, JWKS_REFETCH_COOLDOWN)
+    true
   end
 
   def download_additional_signing_key(entry)
@@ -125,7 +148,8 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   end
 
   # Keeps only the keys that can verify a signature. One published in a shape this library cannot
-  # use is left out, so a token naming it is refused like any unknown key rather than raising.
+  # use is left out, so a token naming it is refused like any unknown key rather than raising. That
+  # includes a shared-secret key, which converts to a string rather than to a public key.
   def key_set_from(response, entry)
     keys = response['keys']
     raise TokenValidator::AdditionalIssuerFetchHelper::UnusableResponse, 'the key set has no list of keys' unless keys.is_a?(Array)
@@ -140,8 +164,7 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   def usable_signing_key?(key)
     return false unless key.is_a?(Hash)
 
-    JSON::JWK.new(key).to_key
-    true
+    JSON::JWK.new(key).to_key.is_a?(OpenSSL::PKey::PKey)
   rescue *KEY_CONVERSION_FAILURES
     false
   end

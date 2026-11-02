@@ -98,17 +98,21 @@ unchanged.
   fetched set replaces the cached one only when the fetch succeeded. `TokenService` does this for
   you. A consumer verifying tokens itself should call
   `OauthTokenService.instance.refetch_signing_key(issuer)` for a token naming a key id it cannot find:
-  it answers the set to search, or `nil` when there is none.
+  it answers the set to search, or `nil` when there is none. `clear_signing_key(issuer)` on an
+  additional issuer does the same, so it never leaves that issuer without keys.
 - **Key expiry:** cached keys are refreshed hourly. If the refresh fails they stay in use for up to a
   day.
-- **One fetch at a time:** within a process, callers that miss the cache together share one fetch.
+- **One fetch at a time:** within a process, callers that miss the cache together share one fetch
+  and its result.
+- **A copy in each process:** each process also keeps the last token and key set it fetched, for as
+  long as the cache would. The cache's copy is used first. `TokenService.clear` forgets them.
 
 The backoff, the refetch limit, the expiry and the single fetch need `Rails.cache`. With none
 configured, every call fetches.
 
 - **A store that keeps nothing**, such as `ActiveSupport::Cache::NullStore`, caches no token and no
-  key set, so every call fetches, one at a time per process for the same token or key set. The
-  backoff and the refetch limit still hold within each process.
+  key set, so each process works from its own copies: one fetch per token or key set, reused until
+  it expires. The backoff and the refetch limit still hold within each process.
 - **A store that refuses writes**, as Rails' Redis store does while Redis is unreachable, behaves the
   same way, except that no key set is fetched again for an unknown key id: such a token is refused.
 

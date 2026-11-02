@@ -220,6 +220,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
     it 'keeps the cached machine token' do
       stub_request(:post, auth0_token_url).to_return(status: 200, body: token_body('auth0-token'))
+      stub_request(:get, "#{auth0_issuer}.well-known/jwks.json").to_return(status: 503)
       service.access_token(auth0_issuer)
 
       service.clear_signing_key(auth0_issuer)

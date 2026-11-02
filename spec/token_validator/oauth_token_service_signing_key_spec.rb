@@ -236,6 +236,11 @@ RSpec.describe TokenValidator::OauthTokenService do
 
       expect(service.signing_key(auth0_issuer)).to be_nil
     end
+
+    it 'fetches nothing when an additional issuer\'s keys are cleared, as there is nothing to clear' do
+      expect(service.clear_signing_key(auth0_issuer)).to be_nil
+      expect(a_request(:get, //)).not_to have_been_made
+    end
   end
 
   describe 'when this library is not configured at all' do

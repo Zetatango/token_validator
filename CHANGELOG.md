@@ -43,11 +43,21 @@ additional issuer sees the changes below on that issuer's path only.
   token naming a key id the cached set lacks, and answers the set to search. `TokenService` now uses
   it in place of `clear_signing_key`. For the primary issuer it does exactly what that retry always
   did. For an additional issuer it is limited and keeps the cached keys when it fails (below), which
-  makes it the call to use for a consumer verifying tokens itself. `clear_signing_key` is unchanged.
+  makes it the call to use for a consumer verifying tokens itself.
+
+### Changed — `clear_signing_key` for an additional issuer
+
+- `OauthTokenService#clear_signing_key(issuer)` naming an additional issuer now does what
+  `refetch_signing_key` does: it fetches that issuer's keys again under the same limit, and the
+  cached keys stay in place unless the fetch succeeds. A consumer that clears and then asks for the
+  keys again on an unknown key id therefore keeps verifying valid tokens when that fetch fails. With
+  no cache configured it fetches nothing. For the primary issuer it is unchanged.
 
 ### Changed — additional issuers only
 
-- **Timeouts.** Key and token fetches allow 5 s to connect and 10 s to read.
+- **Timeouts, and no redirects.** Key and token fetches allow 5 s to connect and 10 s to read, and
+  never follow a redirect: a redirect is a failed fetch, so keys and tokens come only from the
+  addresses the issuer entry names.
 - **Backoff.** After a failed fetch, that issuer's keys, or that issuer and audience's machine token,
   are not asked for again for 10 s. Calls in the meantime answer as the failure did. Shared through
   the cache, so it holds every process back. Each process also keeps its own record, so the backoff
@@ -66,14 +76,18 @@ additional issuer sees the changes below on that issuer's path only.
   processes running an earlier release that share the cache during a rolling deploy can still read
   it.
 - **One fetch at a time.** Within one process, callers that miss the cache together wait for one
-  fetch of that token, or of that issuer's keys, instead of each making their own. A different
-  audience or issuer is never held up. While a stale key set is being refreshed, other callers keep
-  using it rather than wait.
+  fetch of that token, or of that issuer's keys, instead of each making their own, and then use what
+  it fetched. A different audience or issuer is never held up. While a stale key set is being
+  refreshed, other callers keep using it rather than wait.
+- **A copy in each process.** Each process also keeps the last machine token and key set it fetched,
+  for as long as the cache would: a token until three minutes before it expires, a key set for up to
+  a day, refreshed hourly. The cache's copy is used first, so a token or key set another process
+  fetched since is the one used. `TokenService.clear` forgets this process's copies.
 
   The backoff, the refetch limit, the expiry and the single fetch all need a cache. With
   `Rails.cache` unset, every call fetches, as before. With a store that keeps nothing, such as a null
-  store, every call fetches one at a time per process, and the backoff and the refetch limit still
-  hold within each process.
+  store, or Redis while it is unreachable, each process works from its own copies: callers share one
+  fetch and reuse its result, and the backoff and the refetch limit still hold within each process.
 
 ### Failure handling — additional issuers only
 
@@ -84,18 +98,19 @@ additional issuer sees the changes below on that issuer's path only.
     client does not wrap in its own exceptions;
   - a key set that is not JSON, is a JSON value other than an object, has no list of keys, or holds
     no key that can verify a signature;
-  - a published key that cannot be turned into a verification key. It is left out of the set, so a
-    token naming it is refused like any unknown key;
+  - a published key that cannot be turned into a public verification key, a shared-secret key
+    included. It is left out of the set, so a token naming it is refused like any unknown key;
   - a token response that is not a JSON object, lacks a non-empty `access_token`, or lacks a
     numeric `expires_in`;
-  - a token that lives 180 s or less. It could never be handed out, because a token is handed out
-    only until three minutes before it expires, so it is refused, and the log says the lifetime is
-    too short.
+  - a token that lives 180 s or less, or claims to live more than 7 days (604,800 s), infinity
+    included. A token that short could never be handed out, because a token is handed out only until
+    three minutes before it expires, and a longer lifetime is not believed. Either is refused, and
+    the log gives the range a lifetime must fall in.
 
   None of these responses is cached.
 
-  Each failure is logged once, naming the issuer, the audience and the error class or what was wrong
-  with the response. Nothing from the response body is ever logged, because a body can echo a
+  Each failure is logged once, naming the issuer, the audience (quoted and escaped, so it stays on
+  one line) and the error class or what was wrong with the response. Nothing from the response body is ever logged, because a body can echo a
   credential.
 
 ### Not changed

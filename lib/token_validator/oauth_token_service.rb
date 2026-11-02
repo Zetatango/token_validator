@@ -58,14 +58,16 @@ class TokenValidator::OauthTokenService
   # and answers the set to search (nil when there is none). +issuer+ omitted means the primary issuer.
   #
   # For an additional issuer this happens at most once a minute per issuer, and a failed fetch keeps
-  # the keys already cached. That makes it the safer call for a consumer verifying tokens itself:
-  # +clear_signing_key+ drops the cached keys whether or not new ones can be fetched.
+  # the keys already cached.
   def refetch_signing_key(issuer = nil)
     fetch_signing_key_again(issuer)
   end
 
-  # Forgets one issuer's signing keys, leaving every other issuer's cache -- and every machine
-  # token -- alone. +issuer+ omitted means the primary issuer.
+  # Forgets the primary issuer's signing keys when +issuer+ is omitted or names it, leaving every
+  # other issuer's cache -- and every machine token -- alone.
+  #
+  # An additional issuer's keys are not forgotten: this does what +refetch_signing_key+ does, so a
+  # failed fetch keeps the keys valid callers rely on.
   def clear_signing_key(issuer = nil)
     evict_signing_key(issuer)
   end

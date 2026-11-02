@@ -101,7 +101,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       'keys that are not a list' => ->(stub) { stub.to_return(status: 200, body: '{"keys":"none"}') },
       'an empty list of keys' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[]}') },
       'keys that are not objects' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[1,"two",null]}') },
-      'keys none of which can verify' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"RSA","kid":"k"},{"kid":"j"}]}') }
+      'keys none of which can verify' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"RSA","kid":"k"},{"kid":"j"}]}') },
+      'only shared-secret keys' => ->(stub) { stub.to_return(status: 200, body: '{"keys":[{"kty":"oct","kid":"k","k":"c2VjcmV0"}]}') }
     }.each do |failure, respond|
       it "answers no keys for #{failure}, with or without a cache" do
         instance_exec(stub_request(:get, auth0_jwks_url), &respond)
@@ -109,6 +110,16 @@ RSpec.describe TokenValidator::OauthTokenService do
         expect(service.signing_key(auth0_issuer)).to be_nil
         with_cache
         expect(service.signing_key(auth0_issuer)).to be_nil
+      end
+    end
+
+    [301, 302, 303, 307, 308].each do |status|
+      it "answers no keys for a #{status} redirect, and never follows it" do
+        stub_request(:get, auth0_jwks_url).to_return(status:, headers: { 'Location' => 'https://elsewhere.example.com/jwks.json' })
+        elsewhere = stub_request(:any, 'https://elsewhere.example.com/jwks.json').to_return(key_set('a'))
+
+        expect(service.signing_key(auth0_issuer)).to be_nil
+        expect(elsewhere).not_to have_been_requested
       end
     end
 
@@ -127,7 +138,8 @@ RSpec.describe TokenValidator::OauthTokenService do
       'whose modulus is not a string' => { kty: 'RSA', kid: 'x', n: 5, e: 'AQAB' },
       'whose modulus is not base64' => { kty: 'RSA', kid: 'x', n: '!!!', e: 'AQAB' },
       'of no known type' => { kid: 'x' },
-      'whose point is not on its curve' => { kty: 'EC', kid: 'x', crv: 'P-256', x: 'AA', y: 'AA' }
+      'whose point is not on its curve' => { kty: 'EC', kid: 'x', crv: 'P-256', x: 'AA', y: 'AA' },
+      'that is a shared secret' => { kty: 'oct', kid: 'x', k: Base64.urlsafe_encode64('s' * 32, padding: false) }
     }.each do |shape, unusable_key|
       it "leaves out a key #{shape}, and keeps the rest" do
         stub_request(:get, auth0_jwks_url).to_return(status: 200, body: { keys: [unusable_key, jwk('a')] }.to_json)
@@ -208,6 +220,20 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
     end
 
+    it 'releases the refresh lock when an exception is raised into the thread just as it takes the lock' do
+      interrupted = Class.new(StandardError)
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
+      service.signing_key(auth0_issuer)
+      Timecop.travel(Time.now + 61.minutes)
+      lock = service.send(:flight_lock, jwks_cache_key)
+      allow(lock).to(receive(:try_lock).and_wrap_original { |try_lock| try_lock.call.tap { Thread.current.raise(interrupted) } })
+
+      expect { service.signing_key(auth0_issuer) }.to raise_error(interrupted)
+      expect(lock).not_to be_locked
+    ensure
+      lock.unlock if lock&.owned?
+    end
+
     it 'lets the next caller refresh after a refresh that raised an unexpected error' do
       stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
       service.signing_key(auth0_issuer)
@@ -218,9 +244,26 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
     end
 
-    it 'fetches again over an empty set an earlier release cached, even while the set counts as fresh' do
+    it 'answers a set another process has since put in the cache, ahead of the copy this process kept' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'))
+      service.signing_key(auth0_issuer)
+      cache.write(jwks_cache_key, JSON::JWK::Set.new([jwk('a'), jwk('b')]), namespace: service.send(:namespace))
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(%w[a b])
+    end
+
+    it 'never answers an empty set an earlier release cached, answering the last set this process fetched' do
       stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
       service.signing_key(auth0_issuer)
+      cache.write(jwks_cache_key, JSON::JWK::Set.new([]), namespace: service.send(:namespace))
+
+      expect(kids(service.signing_key(auth0_issuer))).to eq(['a'])
+    end
+
+    it 'fetches again over an empty set an earlier release cached, in a process with no set of its own' do
+      stub_request(:get, auth0_jwks_url).to_return(key_set('a'), key_set('b'))
+      service.signing_key(auth0_issuer)
+      service.send(:forget_process_markers)
       cache.write(jwks_cache_key, JSON::JWK::Set.new([]), namespace: service.send(:namespace))
 
       expect(kids(service.signing_key(auth0_issuer))).to eq(['b'])
@@ -315,6 +358,16 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(service.refetch_signing_key(auth0_issuer)).to be_nil
       Timecop.travel(Time.now + 6.seconds)
       expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
+    end
+
+    it 'takes no slot of its own while another process holds the minute, so it may fetch once that ends' do
+      service.refetch_signing_key(auth0_issuer)
+      service.send(:forget_process_markers)
+
+      Timecop.travel(Time.now + 59.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
+      Timecop.travel(Time.now + 61.seconds) { service.refetch_signing_key(auth0_issuer) }
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
     end
 
     it 'counts the minute per issuer' do

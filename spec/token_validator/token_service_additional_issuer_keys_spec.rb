@@ -53,6 +53,15 @@ RSpec.describe TokenValidator::TokenService do
       expect(validates?(auth0_token(kid: 'broken-kid'))).to be false
       expect(validates?(auth0_token)).to be true
     end
+
+    it 'refuses a token naming a shared-secret key, without raising, and still verifies the others' do
+      secret_key = { kty: 'oct', kid: 'secret-kid', k: Base64.urlsafe_encode64('s' * 32, padding: false) }
+      body = { keys: [secret_key, auth0_key.public_key.to_jwk(kid: auth0_kid, use: 'sig', alg: 'RS256')] }.to_json
+      stub_request(:get, auth0_jwks_url).to_return(status: 200, body:)
+
+      expect(validates?(auth0_token(kid: 'secret-kid'))).to be false
+      expect(validates?(auth0_token)).to be true
+    end
   end
 
   describe 'a token naming a key id the cached set lacks' do
@@ -116,6 +125,40 @@ RSpec.describe TokenValidator::TokenService do
 
       expect(validates?(roadrunner_token)).to be true
       expect(a_request(:get, primary_jwks_url)).to have_been_made.once
+    end
+  end
+
+  # A consumer verifying tokens itself may clear an issuer's keys when a token names a key id it cannot
+  # find, and then ask for them again. For an additional issuer that clear is the limited refetch, so
+  # the keys valid callers rely on survive a failed fetch.
+  describe 'a consumer clearing an additional issuer\'s keys for an unknown key id' do
+    before { with_cache }
+
+    def oauth_service = TokenValidator::OauthTokenService.instance
+
+    it 'keeps verifying valid tokens when the fetch that follows the clear fails' do
+      stub_request(:get, auth0_jwks_url).to_return(auth0_key_set([auth0_key, auth0_kid]), { status: 429 }, auth0_key_set([auth0_key, auth0_kid]))
+      validates?(auth0_token)
+      oauth_service.clear_signing_key(auth0_issuer)
+      cleared_at = Time.now
+
+      results = [0, 1, 3, 9].map { |seconds| Timecop.travel(cleared_at + seconds) { validates?(auth0_token) } }
+
+      expect(results).to eq([true, true, true, true])
+    end
+
+    it 'fetches at most once for a run of unknown key ids, each cleared and asked for again' do
+      stub_request(:get, auth0_jwks_url).to_return(auth0_key_set([auth0_key, auth0_kid]))
+      oauth_service.signing_key(auth0_issuer)
+
+      200.times do |n|
+        next if oauth_service.signing_key(auth0_issuer)&.find { |key| key['kid'] == "unknown-#{n}" }
+
+        oauth_service.clear_signing_key(auth0_issuer)
+        oauth_service.signing_key(auth0_issuer)
+      end
+
+      expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
     end
   end
 

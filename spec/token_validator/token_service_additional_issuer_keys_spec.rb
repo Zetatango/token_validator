@@ -83,6 +83,20 @@ RSpec.describe TokenValidator::TokenService do
       expect(validates?(auth0_token(key: next_auth0_key, kid: 'auth0-next'))).to be true
     end
 
+    it 'accepts a key rotated in during a backoff once the issuer recovers, without waiting out the minute' do
+      stub_request(:get, auth0_jwks_url)
+        .to_return(auth0_key_set([auth0_key, auth0_kid]), { status: 503 },
+                   auth0_key_set([auth0_key, auth0_kid], [next_auth0_key, 'auth0-next']))
+      validates?(auth0_token)
+      Timecop.travel(Time.now + 61.minutes)
+      validates?(auth0_token)
+
+      Timecop.travel(Time.now + 5.seconds)
+      expect(validates?(auth0_token(key: next_auth0_key, kid: 'auth0-next'))).to be false
+      Timecop.travel(Time.now + 6.seconds)
+      expect(validates?(auth0_token(key: next_auth0_key, kid: 'auth0-next'))).to be true
+    end
+
     it 'still accepts a rotated key once the cooldown an unknown key id started has passed' do
       stub_request(:get, auth0_jwks_url)
         .to_return(auth0_key_set([auth0_key, auth0_kid]), auth0_key_set([auth0_key, auth0_kid]),

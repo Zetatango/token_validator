@@ -249,7 +249,7 @@ RSpec.describe TokenValidator::OauthTokenService do
     it 'is held back by a failure another process recorded in the cache' do
       stub_request(:get, auth0_jwks_url).to_return({ status: 503 }, key_set('a'))
       service.signing_key(auth0_issuer)
-      service.send(:forget_process_backoffs)
+      service.send(:forget_process_markers)
 
       expect(service.signing_key(auth0_issuer)).to be_nil
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
@@ -306,6 +306,17 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.times(3)
     end
 
+    it 'leaves the refetch slot alone during a backoff, so a rotated key is fetched as soon as it ends' do
+      stub_request(:get, auth0_jwks_url).to_return({ status: 503 }, key_set('a', 'b'))
+      Timecop.travel(Time.now + 61.minutes)
+      service.signing_key(auth0_issuer)
+
+      Timecop.travel(Time.now + 5.seconds)
+      expect(service.refetch_signing_key(auth0_issuer)).to be_nil
+      Timecop.travel(Time.now + 6.seconds)
+      expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
+    end
+
     it 'counts the minute per issuer' do
       stub_request(:get, other_jwks_url).to_return(key_set('c'))
       service.refetch_signing_key(auth0_issuer)
@@ -327,6 +338,17 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(['a'])
       expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
     end
+  end
+
+  it 'refetches for an unknown key id at most once a minute even when the cache keeps nothing' do
+    with_a_cache_that_keeps_nothing
+    stub_request(:get, auth0_jwks_url).to_return(key_set('a', 'b'))
+
+    expect(kids(service.refetch_signing_key(auth0_issuer))).to eq(%w[a b])
+    Timecop.travel(Time.now + 59.seconds) { service.refetch_signing_key(auth0_issuer) }
+    expect(a_request(:get, auth0_jwks_url)).to have_been_made.once
+    Timecop.travel(Time.now + 61.seconds) { service.refetch_signing_key(auth0_issuer) }
+    expect(a_request(:get, auth0_jwks_url)).to have_been_made.twice
   end
 
   it 'refetches nothing for an issuer this library does not trust' do

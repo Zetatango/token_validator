@@ -106,6 +106,12 @@ unchanged.
 The backoff, the refetch limit, the expiry and the single fetch need `Rails.cache`. With none
 configured, every call fetches.
 
+- **A store that keeps nothing**, such as `ActiveSupport::Cache::NullStore`, caches no token and no
+  key set, so every call fetches, one at a time per process for the same token or key set. The
+  backoff and the refetch limit still hold within each process.
+- **A store that refuses writes**, as Rails' Redis store does while Redis is unreachable, behaves the
+  same way, except that no key set is fetched again for an unknown key id: such a token is refused.
+
 ## Installation
 
 This gem is not published to any gem host, so `gem install` cannot find it. Add the pinned GitHub

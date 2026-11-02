@@ -225,7 +225,7 @@ RSpec.describe TokenValidator::OauthTokenService do
     it 'is held back by a failure another process recorded in the cache' do
       stub_request(:post, auth0_token_url).to_return(status: 503)
       token_for(orders_api)
-      service.send(:forget_process_backoffs)
+      service.send(:forget_process_markers)
 
       expect(token_for(orders_api)).to be_nil
       expect(requests_for(orders_api)).to have_been_made.once

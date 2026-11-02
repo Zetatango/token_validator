@@ -49,10 +49,16 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
   # Fetched again at most once per JWKS_REFETCH_COOLDOWN per issuer, across every process sharing the
   # cache; inside the cooldown the cached set is answered as it stands. A failed fetch answers nil and
   # leaves the cached set in place, so it can never cost valid tokens their keys.
+  #
+  # During a backoff nothing is fetched and the answer is nil, as it was for the fetch that failed.
+  # The refetch slot is left alone then, so a rotated key can be fetched as soon as the backoff ends.
   def refetched_additional_signing_key(entry)
     return download_additional_signing_key(entry) if Rails.cache.nil?
 
-    single_flight(jwks_cache_key(entry[:issuer_url])) do
+    jwks_key = jwks_cache_key(entry[:issuer_url])
+    single_flight(jwks_key) do
+      next nil if backing_off?(jwks_key)
+
       refetch_allowed?(entry) ? refresh_signing_key(entry) : cached_signing_key(entry)
     end
   end
@@ -101,10 +107,14 @@ module TokenValidator::AdditionalIssuerSigningKeyHelper
     Rails.cache.exist?(jwks_fresh_key(entry), namespace:)
   end
 
-  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN. A cache that cannot record
-  # the slot answers no, which is the safe direction: the token is refused and the cached keys stand.
+  # Takes the issuer's refetch slot for the next JWKS_REFETCH_COOLDOWN, in this process and in the
+  # cache shared with other processes. The process's own slot holds the limit when the cache keeps
+  # nothing. A cache that refuses the write answers no, which is the safe direction: the token is
+  # refused and the cached keys stand.
   def refetch_allowed?(entry)
-    Rails.cache.write(jwks_refetch_key(entry), true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
+    marker = jwks_refetch_key(entry)
+    mark_in_process_unless_marked(marker, JWKS_REFETCH_COOLDOWN) &&
+      Rails.cache.write(marker, true, namespace:, unless_exist: true, expires_in: JWKS_REFETCH_COOLDOWN)
   end
 
   def download_additional_signing_key(entry)

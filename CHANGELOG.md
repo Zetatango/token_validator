@@ -55,9 +55,11 @@ additional issuer sees the changes below on that issuer's path only.
   the cache keeps nothing: a null store, or Redis while it is unreachable. `TokenService.clear`
   forgets both.
 - **Unknown key ids.** A token naming a key id the cached set lacks makes this library fetch that
-  issuer's keys again at most once a minute, across every process sharing the cache. The fetched set
-  replaces the cached one **only when the fetch succeeded**, so the keys valid callers rely on stay
-  in place through an outage at the issuer.
+  issuer's keys again at most once a minute, across every process sharing the cache, and within each
+  process even when the cache keeps nothing. During a backoff nothing is fetched and the minute is
+  not started, so a rotated key is fetched as soon as the backoff ends. The fetched set replaces the
+  cached one **only when the fetch succeeded**, so the keys valid callers rely on stay in place
+  through an outage at the issuer.
 - **Key expiry.** A cached set is fetched again once it is an hour old, so a key the issuer has
   withdrawn stops being trusted. When that fetch fails the cached set stays in use, so a brief outage
   refuses nobody, for up to a day. The set is still a `JSON::JWK::Set` under the same cache key, so
@@ -69,7 +71,9 @@ additional issuer sees the changes below on that issuer's path only.
   using it rather than wait.
 
   The backoff, the refetch limit, the expiry and the single fetch all need a cache. With
-  `Rails.cache` unset, every call fetches, as before.
+  `Rails.cache` unset, every call fetches, as before. With a store that keeps nothing, such as a null
+  store, every call fetches one at a time per process, and the backoff and the refetch limit still
+  hold within each process.
 
 ### Failure handling — additional issuers only
 

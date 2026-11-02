@@ -50,7 +50,10 @@ additional issuer sees the changes below on that issuer's path only.
 - **Timeouts.** Key and token fetches allow 5 s to connect and 10 s to read.
 - **Backoff.** After a failed fetch, that issuer's keys, or that issuer and audience's machine token,
   are not asked for again for 10 s. Calls in the meantime answer as the failure did. Shared through
-  the cache, so it holds every process back.
+  the cache, so it holds every process back. Each process also keeps its own record, so the backoff
+  still holds within a process, and callers waiting on a fetch that failed share its answer, when
+  the cache keeps nothing: a null store, or Redis while it is unreachable. `TokenService.clear`
+  forgets both.
 - **Unknown key ids.** A token naming a key id the cached set lacks makes this library fetch that
   issuer's keys again at most once a minute, across every process sharing the cache. The fetched set
   replaces the cached one **only when the fetch succeeded**, so the keys valid callers rely on stay

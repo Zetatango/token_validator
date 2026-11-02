@@ -42,6 +42,9 @@ module TokenValidator::AdditionalIssuerFetchHelper
   # Guards the creation of the per-key locks, which every thread in the process shares.
   FLIGHT_LOCKS_GUARD = Mutex.new
 
+  # Guards this process's own record of the backoff, which every thread in the process shares.
+  PROCESS_BACKOFFS_GUARD = Mutex.new
+
   private
 
   # +audience+ is the API the caller named, or ENTRY_AUDIENCE for the one the entry carries.
@@ -122,12 +125,30 @@ module TokenValidator::AdditionalIssuerFetchHelper
   end
 
   # Shared through the cache, so one process's failure holds back every process for the backoff.
+  # Each process also keeps its own record, so the backoff still holds within it -- and threads
+  # waiting on a fetch that failed share its answer -- when the cache keeps nothing, as a null store
+  # or an unreachable Redis does.
   def backing_off?(cache_key)
-    Rails.cache.exist?(failed_fetch_key(cache_key), namespace:)
+    backing_off_in_process?(cache_key) || Rails.cache.exist?(failed_fetch_key(cache_key), namespace:)
   end
 
   def back_off(cache_key)
+    PROCESS_BACKOFFS_GUARD.synchronize { process_backoffs[cache_key] = Time.now + FAILED_FETCH_BACKOFF }
     Rails.cache.write(failed_fetch_key(cache_key), true, namespace:, expires_in: FAILED_FETCH_BACKOFF)
+  end
+
+  def backing_off_in_process?(cache_key)
+    ends_at = PROCESS_BACKOFFS_GUARD.synchronize { process_backoffs[cache_key] }
+    !ends_at.nil? && Time.now < ends_at
+  end
+
+  def forget_process_backoffs
+    PROCESS_BACKOFFS_GUARD.synchronize { process_backoffs.clear }
+  end
+
+  # When each of this process's backoffs ends, by the cache key of what failed.
+  def process_backoffs
+    @process_backoffs ||= {}
   end
 
   def failed_fetch_key(cache_key)

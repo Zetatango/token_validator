@@ -48,6 +48,12 @@ RSpec.describe TokenValidator::OauthTokenService do
     @log_lines ||= StringIO.new
   end
 
+  # A cache that keeps nothing, as a null store does and as Rails' Redis store does while Redis is
+  # unreachable.
+  def with_a_cache_that_keeps_nothing
+    allow(Rails).to receive_messages(cache: ActiveSupport::Cache::NullStore.new, application: TokenValidatorTokenFetchSpec::Application.new)
+  end
+
   before do
     TokenValidator::ValidatorConfig.configure(
       issuer_url: primary_issuer, client_id: 'primary-client', client_secret: 'primary-secret',
@@ -148,12 +154,33 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(requests_for(orders_api)).to have_been_made.once
     end
 
-    it 'asks again once the backoff has passed' do
+    it 'asks again once the backoff has passed, and not before' do
       stub_request(:post, auth0_token_url).to_return({ status: 503 }, { status: 200, body: token_body })
       token_for(orders_api)
 
-      Timecop.travel(Time.now + 11.seconds)
+      Timecop.travel(Time.now + 9.seconds)
+      expect(token_for(orders_api)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
+      expect(token_for(orders_api)).to include(token: 'auth0-token')
+    end
 
+    it 'is held back by a failure another process recorded in the cache' do
+      stub_request(:post, auth0_token_url).to_return(status: 503)
+      token_for(orders_api)
+      service.send(:forget_process_backoffs)
+
+      expect(token_for(orders_api)).to be_nil
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'still holds this process back when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
+      stub_request(:post, auth0_token_url).to_return({ status: 503 }, { status: 200, body: token_body })
+      token_for(orders_api)
+
+      Timecop.travel(Time.now + 9.seconds)
+      expect(token_for(orders_api)).to be_nil
+      Timecop.travel(Time.now + 2.seconds)
       expect(token_for(orders_api)).to include(token: 'auth0-token')
     end
 
@@ -211,7 +238,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
     def concurrent_pair(first_audience, second_audience)
       first = Thread.new { token_for(first_audience) }
-      arrived.pop
+      arrived.pop(timeout: 2)
       second = Thread.new { token_for(second_audience) }
       wait_until_waiting(second)
       [first, second]
@@ -228,6 +255,17 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
 
     it 'gives a caller that waited on a failed fetch nil, without a request of its own' do
+      hold_token_endpoint(503)
+      threads = concurrent_pair(orders_api, orders_api)
+
+      2.times { release << :go }
+
+      expect(threads.map(&:value)).to eq([nil, nil])
+      expect(requests_for(orders_api)).to have_been_made.once
+    end
+
+    it 'gives a caller that waited on a failed fetch nil, without a request of its own, when the cache keeps nothing' do
+      with_a_cache_that_keeps_nothing
       hold_token_endpoint(503)
       threads = concurrent_pair(orders_api, orders_api)
 

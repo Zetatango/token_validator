@@ -49,6 +49,7 @@ class TokenValidator::OauthTokenService
 
   def clear
     clear_cache_if_available
+    forget_process_backoffs
     @access_token = nil
   end
 

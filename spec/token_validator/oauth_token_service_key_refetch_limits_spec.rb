@@ -236,4 +236,80 @@ RSpec.describe TokenValidator::OauthTokenService do
       expect(kids_of(extra_keys)).to eq(['b'])
     end
   end
+
+  # With the shared cache unreachable, the refetch slot can neither be written nor read back, so the
+  # one-a-minute limit is held by the process alone. A key rotated at the issuer is still picked up at
+  # once, rather than refused until the cache returns.
+  describe 'an unknown key id while the shared cache is unreachable' do
+    unreachable_stores = {
+      'refuses every write' => -> { AdditionalIssuerContext::WriteRefusingStore.new },
+      'misses every read and refuses every write' => -> { AdditionalIssuerContext::UnreachableStore.new }
+    }
+
+    unreachable_stores.each do |kind, store|
+      describe "in a cache that #{kind}" do
+        before do
+          use_cache(store.call)
+          stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'), key_set_response('c'))
+          extra_keys
+        end
+
+        it 'fetches the keys again at once and answers the rotated set' do
+          expect(kids_of(refetched_extra_keys)).to eq(['b'])
+          expect(key_requests).to have_been_made.twice
+        end
+
+        it 'then fetches nothing for a minute, and again once it has passed, and not a moment before' do
+          refetched_extra_keys
+
+          at(1) { refetched_extra_keys }
+          at(60 - just) { refetched_extra_keys }
+          expect(key_requests).to have_been_made.twice
+
+          at(60 + just) { expect(kids_of(refetched_extra_keys)).to eq(['c']) }
+          expect(key_requests).to have_been_made.times(3)
+        end
+
+        it 'shares the minute with clearing the keys, whichever comes first' do
+          cleared_keys
+
+          at(1) { refetched_extra_keys }
+
+          expect(key_requests).to have_been_made.twice
+        end
+
+        it 'counts the minute for each issuer separately' do
+          other = 'https://other-tenant.ca.auth0.com/'
+          TokenValidator::ValidatorConfig.additional_issuers = [extra_entry, extra_entry.merge(issuer_url: other, jwks_url: "#{other}jwks.json")]
+          stub_request(:get, "#{other}jwks.json").to_return(key_set_response('other'))
+          refetched_extra_keys
+
+          expect(kids_of(service.refetch_signing_key(other))).to eq(['other'])
+        end
+      end
+    end
+
+    it 'lets a token signed with the rotated key verify at once' do
+      use_cache(AdditionalIssuerContext::UnreachableStore.new)
+      stub_request(:get, jwks_url).to_return(key_set_response('a'), key_set_response('b'))
+      extra_keys
+      claims = { sub: 'subject', iat: Time.now.to_i, exp: (Time.now + 30.minutes).to_i, jti: SecureRandom.uuid,
+                 iss: issuer, aud: AdditionalIssuerContext::ENTRY_API, scopes: ['test:api'] }
+      rotated = JWT.encode(claims, AdditionalIssuerContext::SIGNING_KEYS['b'], 'RS256', { kid: 'b' })
+
+      expect(TokenValidator::TokenService.new(rotated, ['test:api']).valid_access_token?).to be(true)
+    end
+
+    it 'still refuses a token naming a key id the issuer does not publish, and fetches no more than once a minute for them' do
+      use_cache(AdditionalIssuerContext::UnreachableStore.new)
+      stub_request(:get, jwks_url).to_return(key_set_response('a'))
+      extra_keys
+      claims = { sub: 'subject', iat: Time.now.to_i, exp: (Time.now + 30.minutes).to_i, jti: SecureRandom.uuid,
+                 iss: issuer, aud: AdditionalIssuerContext::ENTRY_API, scopes: ['test:api'] }
+      strangers = Array.new(5) { |index| JWT.encode(claims, AdditionalIssuerContext::SIGNING_KEYS["stranger-#{index}"], 'RS256', { kid: "stranger-#{index}" }) }
+
+      expect(strangers.map { |token| TokenValidator::TokenService.new(token, ['test:api']).valid_access_token? }).to all(be(false))
+      expect(key_requests).to have_been_made.twice
+    end
+  end
 end

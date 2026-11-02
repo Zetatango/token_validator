@@ -34,6 +34,16 @@ module AdditionalIssuerContext
     end
   end
 
+  # Cache that behaves as Rails' Redis store does while Redis is unreachable: every read misses and
+  # every write reports failure.
+  class UnreachableStore < ActiveSupport::Cache::MemoryStore
+    protected
+
+    def read_entry(_key, **) = nil
+
+    def write_entry(_key, _entry, **) = false # rubocop:disable Naming/PredicateMethod
+  end
+
   # Cache that turns an expiry into whole milliseconds before storing, as a Redis-backed store does.
   # That arithmetic raises for an infinite expiry, which an in-memory store accepts.
   class MillisecondExpiryStore < ActiveSupport::Cache::MemoryStore

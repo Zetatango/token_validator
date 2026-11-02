@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 module TokenValidator
+  require 'token_validator/helpers/additional_issuer_fetch_helper'
+  require 'token_validator/helpers/additional_issuer_signing_key_helper'
   require 'token_validator/helpers/token_cache_helper'
 
   require 'token_validator/claim_normalizer'

@@ -7,6 +7,98 @@ Consumers pin a tag in their Gemfile (decision D23):
 gem 'token_validator', github: 'Zetatango/token_validator', tag: 'v0.7.0'
 ```
 
+## v0.9.0 — 2026-11-01
+
+One machine token per receiving API, and safer fetching of an additional issuer's signing keys and
+machine tokens. **The primary issuer is unchanged, failures included**, and a caller that names no
+audience sends, caches and receives exactly what it did. `bin/parity_check` against v0.8.0 is
+identical across all 30 scenarios: the existing 28, plus 2 new ones for an additional issuer's
+machine token asked for without an audience.
+
+A consumer that trusts only the primary issuer sees no change at all. One that also trusts an
+additional issuer sees the changes below on that issuer's path only.
+
+### Added
+
+- `audience:` on `OauthTokenService#access_token` and `#oauth_auth_header`. (LEN-1710)
+
+  A service that calls several others needs a machine token for each, because each accepts only
+  tokens naming its own API. An additional issuer can now be asked for a token for a named API.
+
+  Contract, pinned by spec:
+
+  - **omitted, nothing changes**: the request names the entry's `audience`, and the cache key, the
+    three-minute early expiry and the nil on failure are those of v0.8.0
+  - a non-blank String asks for that audience, and the token is cached under the issuer **and** the
+    audience, apart from every other audience's token
+  - **anything else answers nil and requests nothing**: an explicit `nil`, a blank or non-String
+    value, any audience for the primary issuer (which is never sent one), and any audience for an
+    issuer configured only for verification. Only leaving the keyword out means "the entry's
+    audience", so a setting that was never configured cannot quietly fetch a token for another API
+
+- `OauthTokenService#refetch_signing_key(issuer = nil)`, which fetches an issuer's keys again for a
+  token naming a key id the cached set lacks, and answers the set to search. `TokenService` now uses
+  it in place of `clear_signing_key`. For the primary issuer it does exactly what that retry always
+  did. For an additional issuer it is limited and keeps the cached keys when it fails (below), which
+  makes it the safer call for a consumer verifying tokens itself. `clear_signing_key` is unchanged.
+
+### Changed — additional issuers only
+
+- **Timeouts.** Key and token fetches allow 5 s to connect and 10 s to read, instead of the HTTP
+  client's default of about a minute each.
+- **Backoff.** After a failed fetch, that issuer's keys, or that issuer and audience's machine token,
+  are not asked for again for 10 s. Calls in the meantime answer as the failure did. Shared through
+  the cache, so it holds every process back.
+- **Unknown key ids.** A token naming a key id the cached set lacks makes this library fetch that
+  issuer's keys again at most once a minute, across every process sharing the cache. The fetched set
+  replaces the cached one **only when the fetch succeeded**. Before, every such token dropped the
+  cached keys and fetched them again, so anyone could turn each request into a key fetch, and one
+  such request during an outage at the issuer cost every valid caller its keys.
+- **Key expiry.** A cached set is fetched again once it is an hour old, so a key the issuer has
+  withdrawn stops being trusted. When that fetch fails the cached set stays in use, so a brief outage
+  refuses nobody, for up to a day. The set is still a `JSON::JWK::Set` under the same cache key, so
+  processes running an earlier release that share the cache during a rolling deploy can still read
+  it.
+- **One fetch at a time.** Within one process, callers that miss the cache together wait for one
+  fetch of that token, or of that issuer's keys, instead of each making their own. A different
+  audience or issuer is never held up. While a stale key set is being refreshed, other callers keep
+  using it rather than wait.
+
+  The backoff, the refetch limit, the expiry and the single fetch all need a cache. With
+  `Rails.cache` unset, every call fetches, as before.
+
+### Fixed — additional issuers only
+
+- **Every failed fetch is a clean answer**: no machine token (nil, an empty header), or a refused
+  token for verification. It is never an exception. Each of these escaped before, or produced a bad
+  token:
+  - DNS failures, connection resets, unreachable hosts, TLS errors and broken streams, which the
+    HTTP client does not wrap in its own exceptions;
+  - a key set that is not JSON, is a JSON value other than an object, has no list of keys, or holds
+    no key that can verify a signature;
+  - a published key that cannot be turned into a verification key. It is left out of the set, so a
+    token naming it is refused like any unknown key, instead of raising during verification;
+  - a token response that is not a JSON object, lacks a non-empty `access_token`, or lacks a
+    numeric `expires_in`. A missing `access_token` used to be cached and handed out as an empty
+    bearer header until it expired.
+
+  Each failure is logged once, naming the issuer, the audience and the error class or what was wrong
+  with the response. Nothing from the response body is ever logged, because a body can echo a
+  credential.
+
+### Not changed
+
+- **The primary issuer's fetching**, deliberately: the HTTP client's default timeouts, the exceptions
+  it has always let through, no backoff, no limit on refetching keys, and no expiry on cached keys.
+  Pinned by spec. A later release may extend the same handling to it.
+- **`OauthTokenService#get_token_info`**, which asks only the primary issuer about a token. It keeps
+  that issuer's behaviour above, and a later release may extend the same handling to it too.
+
+### Tooling
+
+- `bin/parity_check` also compares an additional issuer's machine token asked for without an
+  audience: the request it sends and the token and header it answers.
+
 ## v0.8.0 — 2026-09-23
 
 Adds one shape for a token's custom claims, whichever issuer emitted them, and a per-issuer

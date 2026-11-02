@@ -1,4 +1,4 @@
-version: 2
+version: 2.1
 jobs:
   build:
     parallelism: 1
@@ -62,3 +62,8 @@ jobs:
       - store_artifacts:
           path: coverage
           prefix: coverage
+
+workflows:
+  build:
+    jobs:
+      - build

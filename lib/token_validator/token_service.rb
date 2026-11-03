@@ -278,36 +278,28 @@ class TokenValidator::TokenService
     "Invalid algorithm: token names #{claimed}, #{configured}"
   end
 
-  # A +kid+ this issuer has not published usually means it rotated its keys, so forget what we
-  # cached for *that issuer* and look once more.
+  # A +kid+ this issuer has not published usually means it rotated its keys, so *that issuer's* keys
+  # are fetched again and searched once more.
   #
-  # Scoped rather than a full +clear+ on purpose: +kid+ and +iss+ both come from an unauthenticated
+  # Asked for by issuer, never as a full +clear+: +kid+ and +iss+ both come from an unauthenticated
   # token, so a wholesale flush here would let any rejected token evict every other issuer's keys
-  # and machine tokens and force a round of refetches.
+  # and machine tokens. How often an issuer's keys may be refetched, and what a failed refetch does
+  # to the keys already cached, is +refetch_signing_key+'s to decide.
+  #
+  # For the primary issuer, keys are asked for by the address they have always resolved to; for any
+  # other, the per-issuer cache is what stops one issuer's keys being handed back for another's token.
   def find_jwk(entry)
-    jwk = search_jwks(entry)
-    if jwk.nil?
-      TokenValidator::OauthTokenService.instance.clear_signing_key(entry[:issuer_url])
-      jwk = search_jwks(entry)
-    end
-    jwk
+    service = TokenValidator::OauthTokenService.instance
+    issuer = entry[:issuer_url]
+
+    matching_jwk(service.signing_key(issuer)) || matching_jwk(service.refetch_signing_key(issuer))
   end
 
-  # Asks for this issuer's keys by name rather than for the default set. For the primary issuer that
-  # resolves to the address it has always resolved to, so its path is unchanged; for any other, the
-  # per-issuer cache from M1-02 is what stops one issuer's keys being handed back for another's
-  # token.
-  def search_jwks(entry)
-    jwks = TokenValidator::OauthTokenService.instance.signing_key(entry[:issuer_url])
+  def matching_jwk(jwks)
     return nil if jwks.blank?
 
     kid = token_kid
-
-    jwks.each do |key|
-      return key if key['kid'] == kid
-    end
-
-    nil
+    jwks.find { |key| key['kid'] == kid }
   end
 
   # The +kid+ the token names: from its header when it carries one there, from its payload

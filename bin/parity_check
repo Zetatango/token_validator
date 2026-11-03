@@ -183,6 +183,35 @@ results.last['requests'] = requests.dup
 observe('oauth auth header', results, log) { TokenValidator::OauthTokenService.instance.oauth_auth_header }
 observe('basic http header', results, log) { TokenValidator::OauthTokenService.instance.basic_http_header }
 
+# An additional issuer's machine token, asked for without naming an audience. Callers that never name
+# one must keep sending exactly this request and receiving exactly this token. Skipped for a checkout
+# that predates additional issuers.
+if TokenValidator::ValidatorConfig.respond_to?(:additional_issuers=)
+  additional_issuer = 'https://tenant.example.com/'
+  additional_token_url = 'https://tenant.example.com/oauth/token'
+
+  WebMock.reset!
+  requests.clear
+  stub_request(:post, additional_token_url).to_return do |request|
+    requests << "POST #{request.uri} #{request.body}"
+    { status: 200, body: { access_token: 'additional-machine-token', expires_in: 86_400 }.to_json }
+  end
+  configure!
+  TokenValidator::ValidatorConfig.additional_issuers = [
+    { issuer_url: additional_issuer, jwks_url: "#{additional_issuer}.well-known/jwks.json", audience: 'https://receiver.example.com',
+      algorithm: 'RS256', client_id: 'additional-client', client_secret: 'additional-secret' }
+  ]
+  TokenValidator::TokenService.clear
+  capture_log(log)
+  observe('additional issuer machine token request', results, log) do
+    TokenValidator::OauthTokenService.instance.access_token(additional_issuer)&.slice(:token, :expires_in)
+  end
+  results.last['requests'] = requests.dup
+  observe('additional issuer oauth auth header', results, log) do
+    TokenValidator::OauthTokenService.instance.oauth_auth_header(additional_issuer)
+  end
+end
+
 WebMock.reset!
 requests.clear
 stub_request(:get, JWKS_URL).to_return do |request|

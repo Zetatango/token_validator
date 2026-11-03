@@ -50,6 +50,7 @@ TokenValidator::ValidatorConfig.configure(
   when it is configured rather than when a token arrives.
 - An entry that omits `client_id` and `client_secret` is trusted to *verify* tokens but is never
   asked for one, rather than falling back to the primary issuer's credentials.
+- `audience` may be a list. A token naming any one of its members verifies.
 - A malformed entry raises `TokenValidator::ValidatorConfig::InvalidIssuerConfigException`. Rescue
   it in your initializer, report it, and re-raise, so the application refuses to boot on an issuer
   configuration it cannot trust. The exception names the offending position and key but **not the
@@ -60,6 +61,80 @@ TokenValidator::ValidatorConfig.configure(
   No other value from the entry ever joins it.
 - Omitting `additional_issuers` leaves behaviour exactly as it was: one issuer, verified the way it
   always has been.
+
+### Machine tokens for a particular API
+
+A service that calls several others needs a machine token for each, because each accepts only tokens
+naming its own API. Ask an additional issuer for one by audience:
+
+```ruby
+service = TokenValidator::OauthTokenService.instance
+
+service.oauth_auth_header(ENV['auth0_issuer_url'], audience: ENV['orders_api_audience'])
+# => { authorization: 'Bearer ...' }, or {} when no token can be obtained
+```
+
+- Each token is cached under the issuer and the audience, and is handed out until three minutes
+  before it expires. A token that lives three minutes or less is refused, and the log says why.
+- Leaving `audience:` out asks for the audience the issuer entry names, exactly as before. An entry
+  whose `audience` is a list answers `nil` instead and requests nothing: name the one you want.
+- Passing `nil`, a blank or non-String value, or any audience for the primary issuer answers `nil`
+  (an empty header) and requests nothing. Check the setting before calling if a missing one should
+  be reported.
+
+### How an additional issuer's keys and tokens are fetched
+
+Each additional issuer is fetched from with these protections. The primary issuer's fetching is
+unchanged.
+
+- **Timeouts:** 5 s to connect and 10 s to read.
+- **Failures** answer no token, or a refused token for verification, and are logged without anything
+  from the response.
+- **Backoff:** after a failed fetch the same thing is not asked for again for 10 s. Each process
+  also remembers its own failures, so this holds even when the cache keeps nothing.
+  `TokenService.clear` forgets them, which a test suite stubbing failures should call between
+  examples.
+- **Unknown key ids:** an issuer's keys are fetched again for one at most once a minute, and the
+  fetched set replaces the cached one only when the fetch succeeded. `TokenService` does this for
+  you. A consumer verifying tokens itself should call
+  `OauthTokenService.instance.refetch_signing_key(issuer)` for a token naming a key id it cannot
+  find. It answers the set to search:
+  - the newly fetched set, when it fetches and the fetch succeeds;
+  - the cached set as it stands, within the minute after the last refetch;
+  - `nil` during the 10 s backoff after a failed fetch, and when the fetch fails. The cached set
+    stays in place either way.
+- **`clear_signing_key(issuer)` on an additional issuer** does not delete that issuer's keys. It
+  makes the same refetch, under the same limit, and answers that refetch's result: the key set, or
+  `nil`. It no longer answers the `true`/`false` of deleting a cache entry. With no cache configured
+  it fetches nothing and answers `nil`. For the primary issuer it is unchanged.
+- **Key expiry:** cached keys are refreshed hourly. If the refresh fails they stay in use for up to a
+  day.
+- **One fetch at a time:** within a process, callers that miss the cache together share one fetch
+  and its result.
+- **A copy in each process:** each process also keeps the last token and key set it fetched. The
+  cache's copy is used first, and the process's copy whenever the cache has no entry, including
+  after the cache is flushed, so flushing it does not force a fetch. Keys are still fetched again
+  within an hour of the last fetch, and a token is handed out at most until three minutes before it
+  expires. To force an immediate refresh, call `TokenService.clear` in each process, or restart it.
+
+The backoff, the refetch limit, the expiry and the single fetch need `Rails.cache`. With none
+configured, every call fetches.
+
+- **A store that keeps nothing**, such as `ActiveSupport::Cache::NullStore`, caches no token and no
+  key set, so each process works from its own copies: one fetch per token or key set, reused until
+  it expires. The backoff and the refetch limit still hold within each process.
+- **A store that refuses writes**, as Rails' Redis store does while Redis is unreachable, behaves the
+  same way, so a key set is still fetched again for an unknown key id at most once a minute in each
+  process.
+
+### Tests in a consuming app
+
+Because each process keeps its own copies of the tokens and key sets it fetched, a test suite must
+call `TokenService.clear` (or `OauthTokenService.instance.clear`) in its setup, before every
+example. Otherwise a token or key set stubbed in one example is handed out in the next. The call
+also forgets the backoffs and refetch limits a failing stub started. This matters most when the test
+environment's cache keeps nothing, such as `:null_store`, or when it sets no cache store at all and
+Rails' default store applies.
 
 ## Installation
 

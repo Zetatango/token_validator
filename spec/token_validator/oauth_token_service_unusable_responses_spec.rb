@@ -2,10 +2,10 @@
 
 require 'spec_helper'
 
-# What an additional issuer's token and key endpoints can send that must be refused rather than acted
-# on: a redirect, a signing key that is not a public key, and an audience that would forge a log line
-# when it is written into one. Each is an unusable response: a clean "nothing" answer, a single log
-# line that carries nothing a response can forge, and no repeat request within the backoff.
+# Responses from an additional issuer's token and key endpoints that cannot be used and are set
+# aside rather than acted on: a redirect, a signing key that is not a public key, and an audience
+# containing control characters. Each gives a clean "nothing" answer, a single plain log line, and
+# no repeat request within the backoff.
 RSpec.describe TokenValidator::OauthTokenService do
   include_context 'with an additional issuer'
   include_context 'with signed tokens'
@@ -82,11 +82,11 @@ RSpec.describe TokenValidator::OauthTokenService do
   end
 
   describe 'a signing key that is not a public key' do
-    def secret = 'a-shared-secret-of-the-issuer-that-must-never-verify-anything'
+    def key_material = 'symmetric-key-material-of-the-issuer'
     def good_kid = 'good-kid'
 
-    def oct_key
-      { kty: 'oct', kid: 'shared-secret-kid', k: Base64.urlsafe_encode64(secret, padding: false), use: 'sig', alg: 'HS256' }
+    def symmetric_key
+      { kty: 'oct', kid: 'symmetric-key-kid', k: Base64.urlsafe_encode64(key_material, padding: false), use: 'sig', alg: 'HS256' }
     end
 
     def extra_claims
@@ -94,8 +94,8 @@ RSpec.describe TokenValidator::OauthTokenService do
         iss: AdditionalIssuerContext::EXTRA_ISSUER, aud: AdditionalIssuerContext::ENTRY_API, scopes: ['test:api'] }
     end
 
-    def token_signed_with_secret(algorithm: 'HS256')
-      JWT.encode(extra_claims, secret, algorithm, { kid: oct_key[:kid] })
+    def token_signed_with_symmetric_key(algorithm: 'HS256')
+      JWT.encode(extra_claims, key_material, algorithm, { kid: symmetric_key[:kid] })
     end
 
     def token_signed_with_rsa(kid)
@@ -107,56 +107,56 @@ RSpec.describe TokenValidator::OauthTokenService do
     end
 
     it 'is left out of the set, so a token naming it is refused, whichever algorithm it claims' do
-      publish(oct_key, jwk(good_kid))
+      publish(symmetric_key, jwk(good_kid))
 
       expect(kids_of(extra_keys)).to eq([good_kid])
-      %w[HS256 HS384 HS512].each { |algorithm| expect(validates?(token_signed_with_secret(algorithm:))).to be(false) }
+      %w[HS256 HS384 HS512].each { |algorithm| expect(validates?(token_signed_with_symmetric_key(algorithm:))).to be(false) }
     end
 
     it 'does not stop a token signed with a usable key in the same set from verifying' do
-      publish(oct_key, jwk(good_kid))
+      publish(symmetric_key, jwk(good_kid))
 
       expect(validates?(token_signed_with_rsa(good_kid))).to be(true)
     end
 
     it 'refuses a token that names it and is signed with some other key' do
-      publish(oct_key, jwk(good_kid))
+      publish(symmetric_key, jwk(good_kid))
 
-      expect(validates?(JWT.encode(extra_claims, AdditionalIssuerContext::SIGNING_KEYS[good_kid], 'RS256', { kid: oct_key[:kid] }))).to be(false)
+      expect(validates?(JWT.encode(extra_claims, AdditionalIssuerContext::SIGNING_KEYS[good_kid], 'RS256', { kid: symmetric_key[:kid] }))).to be(false)
     end
 
     it 'leaves a set with no usable key unusable: no keys, a clean answer for every token, and no raise' do
-      publish(oct_key)
+      publish(symmetric_key)
 
       expect(extra_keys).to be_nil
-      expect(validates?(token_signed_with_secret)).to be(false)
+      expect(validates?(token_signed_with_symmetric_key)).to be(false)
     end
 
     it 'is refused on a refetch for an unknown key id too' do
       publish(jwk(good_kid))
       extra_keys
-      publish(oct_key, jwk(good_kid))
+      publish(symmetric_key, jwk(good_kid))
       Timecop.travel(Time.now + 61.seconds)
 
       expect(kids_of(refetched_extra_keys)).to eq([good_kid])
-      expect(validates?(token_signed_with_secret)).to be(false)
+      expect(validates?(token_signed_with_symmetric_key)).to be(false)
     end
   end
 
-  describe 'an audience that forges a log line' do
-    forging_audiences = {
-      'a newline' => "https://api.example.com/forged\nERROR -- : Logged in as admin",
-      'a carriage return and line feed' => "https://api.example.com/forged\r\nERROR -- : Logged in as admin",
-      'a terminal escape' => "https://api.example.com/forged\e[2J\e[31m",
-      'a null byte' => "https://api.example.com/forged\u0000hidden",
-      'a unicode line separator' => "https://api.example.com/forged ERROR -- : Logged in as admin"
+  describe 'an audience containing control characters' do
+    control_character_audiences = {
+      'a newline' => "https://api.example.com/name\nline2",
+      'a carriage return and line feed' => "https://api.example.com/name\r\nline2",
+      'a terminal escape' => "https://api.example.com/name\e[2J\e[31m",
+      'a null byte' => "https://api.example.com/name\u0000hidden",
+      'a unicode line separator' => "https://api.example.com/name line2"
     }
 
     def written
       log_lines.string
     end
 
-    forging_audiences.each do |kind, audience|
+    control_character_audiences.each do |kind, audience|
       it "containing #{kind} is written as one line with no raw control character, when its token cannot be fetched" do
         stub_request(:post, token_url).to_return(status: 503)
 
@@ -164,7 +164,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
         expect(written.lines.size).to eq(1)
         expect(written.chomp).not_to match(/[\u0000-\u001f\u007f  ]/)
-        expect(written).to include('https://api.example.com/forged')
+        expect(written).to include('https://api.example.com/name')
       end
 
       it "containing #{kind} is written as one line with no raw control character, when its token lives too briefly" do
@@ -174,7 +174,7 @@ RSpec.describe TokenValidator::OauthTokenService do
 
         expect(written.lines.size).to eq(1)
         expect(written.chomp).not_to match(/[\u0000-\u001f\u007f  ]/)
-        expect(written).to include('https://api.example.com/forged')
+        expect(written).to include('https://api.example.com/name')
       end
     end
 
